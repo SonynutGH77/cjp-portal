@@ -2,7 +2,7 @@
    OAuth 2.0 Authorization Code + PKCE. No client secret or private key.
    Access/refresh tokens are session-only. Private storage is resolved after authentication. */
 'use strict';
-const APP_VER = '6.5.3';
+const APP_VER = '6.5.4';
 const C = Object.freeze({
   clientId: 'f0aadf0f-e8d9-4698-ae0b-c9cb3ba23bfb',
   tenant: 'fca9cce9-dd25-4940-bcde-820d1ec34cfe'
@@ -915,13 +915,14 @@ function renderAll() {
 const msBtn = (label, fn) => `<button class="btn primary big ms" onclick="${fn}"><i><b style="background:#f25022"></b><b style="background:#7fba00"></b><b style="background:#00a4ef"></b><b style="background:#ffb900"></b></i>${label}</button>`;
 function gate(html) { $('gateBody').innerHTML = html; $('gate').style.display = 'flex' }
 function showSignIn(msg) {
-  gate(`${msg ? `<div class="note warn" style="margin:0 0 14px">${esc(msg)}</div>` : ''}<p class="muted">Sign in with your Microsoft account to access your private property and financial dashboard.</p>
-  <div class="row" style="margin-top:14px">${msBtn('Sign in with Microsoft', 'Auth.login()')}</div>
-  <div class="muted sm" style="margin-top:18px">🔒 Authentication required. Financial information is not available until sign-in is complete.</div>`);
+  gate(`${msg ? `<div class="note warn" style="margin:0 0 14px">${esc(msg)}</div>` : ''}
+  <p class="muted" style="margin:0 0 14px">Sign in with Microsoft to access your private property and financial dashboard.</p>
+  <div class="row">${msBtn('Sign in with Microsoft', 'Auth.login()')}</div>
+  <div class="muted sm" style="margin-top:18px">🔒 Authentication required. Financial information remains unavailable until sign-in completes.</div>`);
 }
 function showStorageSetup(msg) {
-  gate(`<h2 style="margin-top:0">Complete private setup</h2>${msg ? `<div class="note warn" style="margin:0 0 14px">${esc(msg)}</div>` : ''}
-  <p class="muted">This one-time step securely links this browser after Microsoft authentication. The location is not published with the website.</p>
+  gate(`<h2 style="margin-top:0">Connect private data</h2>${msg ? `<div class="note warn" style="margin:0 0 14px">${esc(msg)}</div>` : ''}
+  <p class="muted">Microsoft authentication is complete. This one-time step links this browser to your private data store; the location is never published with the website.</p>
   <label>Private Microsoft 365 site URL</label><input id="privateSiteUrl" type="url" autocomplete="off" placeholder="https://tenant.sharepoint.com/sites/private-site">
   <div class="row end" style="margin-top:14px"><button class="btn" onclick="Auth.logout()">Sign out</button><button class="btn primary" id="privateSiteGo">Connect private storage</button></div>`);
   $('privateSiteGo').onclick = async () => {
