@@ -1,13 +1,12 @@
-/* =====================================================================
-   CJP Investments Portal v5.0
-   Sign-in: Microsoft Entra (auth code + PKCE, no secrets) → Microsoft Graph
-   Storage: CJPInvesments document library (Portal/ read-write, Properties/ read)
-   Fallback: synced folder on a PC (File System Access API)
-   This file contains NO personal data – everything loads after sign-in.
-   ===================================================================== */
+/* Property Portal v6.5.3 - Microsoft Entra SPA
+   OAuth 2.0 Authorization Code + PKCE. No client secret or private key.
+   Access/refresh tokens are session-only. Private storage is resolved after authentication. */
 'use strict';
-const APP_VER = '5.0.1';
-const C = window.CJP_CONFIG || {};
+const APP_VER = '6.5.3';
+const C = Object.freeze({
+  clientId: 'f0aadf0f-e8d9-4698-ae0b-c9cb3ba23bfb',
+  tenant: 'fca9cce9-dd25-4940-bcde-820d1ec34cfe'
+});
 const P_DATA = 'Portal/data/portal-data.json', P_BACKUP = 'Portal/data/backups', P_INBOX = 'Portal/data/inbox', P_LOG = 'Portal/data/agent-log', P_TB = 'Portal/data/inbox/timelybills', P_EXPORTS = 'Portal/exports', P_IMAGES = 'Portal/images', P_PROPS = 'Properties';
 const ACTIVITY_MAX = 1500;
 
@@ -24,7 +23,7 @@ const Auth = {
     const v = this.b64u(crypto.getRandomValues(new Uint8Array(32))), st = this.b64u(crypto.getRandomValues(new Uint8Array(16)));
     const ch = this.b64u(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(v)));
     sessionStorage.setItem('cjp.pkce', JSON.stringify({ v, st }));
-    const q = new URLSearchParams({ client_id: C.clientId, response_type: 'code', redirect_uri: this.redirect(), response_mode: 'query', scope: this.scope, state: st, code_challenge: ch, code_challenge_method: 'S256', prompt: 'select_account' });
+    const q = new URLSearchParams({ client_id: C.clientId, response_type: 'code', redirect_uri: this.redirect(), response_mode: 'query', scope: this.scope, state: st, code_challenge: ch, code_challenge_method: 'S256' });
     location.assign(this.base() + '/authorize?' + q);
   },
   async handleRedirect() {
@@ -58,7 +57,7 @@ async function gErr(r, what) { let m = ''; try { const j = await r.json(); m = j
 
 /* ---------------- Storage: SharePoint via Graph ---------------- */
 const Cloud = {
-  kind: 'cloud', label: 'SharePoint (signed in)', drive: null, libUrl: '',
+  kind: 'cloud', label: 'Private storage', drive: null, libUrl: '',
   async g(path, o = {}) {
     const at = await Auth.access();
     const r = await fetch(path.startsWith('http') ? path : 'https://graph.microsoft.com/v1.0' + path, { ...o, headers: { Authorization: 'Bearer ' + at, ...(o.headers || {}) } });
@@ -66,12 +65,21 @@ const Cloud = {
     return r;
   },
   async init() {
-    const r = await this.g(`/sites/${C.siteHost}:${C.sitePath}?$select=id,webUrl`);
-    if (r.status === 403) throw new Error('Signed in, but this account has no access to the CJPInvesments site (check the app\'s Sites.Selected grant and your site membership).');
-    if (!r.ok) throw new Error(await gErr(r, 'Could not open the CJPInvesments site'));
-    const s = await r.json();
-    const d = await this.g(`/sites/${s.id}/drive?$select=id,webUrl`); if (!d.ok) throw new Error(await gErr(d, 'Could not open the document library'));
+    const siteId = localStorage.getItem('cjp.storage.siteId');
+    if (!siteId) throw Object.assign(new Error('Private storage connection required.'), { setup: true });
+    const d = await this.g(`/sites/${encodeURIComponent(siteId)}/drive?$select=id,webUrl`);
+    if (d.status === 403 || d.status === 404) { localStorage.removeItem('cjp.storage.siteId'); throw Object.assign(new Error('Private storage connection needs to be renewed.'), { setup: true }); }
+    if (!d.ok) throw new Error('Private storage is temporarily unavailable.');
     const dj = await d.json(); this.drive = `/drives/${dj.id}`; this.libUrl = dj.webUrl;
+  },
+  async configure(url) {
+    let u; try { u = new URL(String(url || '').trim()); } catch { throw new Error('Enter the full private storage URL.'); }
+    if (u.protocol !== 'https:' || !u.hostname.endsWith('.sharepoint.com') || !u.pathname.startsWith('/sites/')) throw new Error('Enter a valid HTTPS Microsoft 365 site URL.');
+    const r = await this.g(`/sites/${u.hostname}:${u.pathname.replace(/\/$/, '')}?$select=id`);
+    if (!r.ok) throw new Error('That private storage location is not available to this account.');
+    const j = await r.json();
+    localStorage.setItem('cjp.storage.siteId', j.id);
+    await this.init();
   },
   ip(p) { return this.drive + '/root:/' + p.split('/').filter(Boolean).map(encodeURIComponent).join('/') + ':' },
   async meta(p) { const r = await this.g(this.ip(p)); if (r.status === 404) return null; if (!r.ok) throw new Error(await gErr(r, 'Read failed')); return r.json() },
@@ -114,28 +122,7 @@ const Cloud = {
   linkFor(p) { return this.libUrl ? this.libUrl + '/' + p.split('/').map(encodeURIComponent).join('/') : '' }
 };
 
-/* ---------------- Storage: synced folder (PC fallback) ---------------- */
-const IDB = {
-  db: null,
-  open() { return new Promise((res, rej) => { const r = indexedDB.open('cjp-portal5', 1); r.onupgradeneeded = () => r.result.createObjectStore('kv'); r.onsuccess = () => { this.db = r.result; res() }; r.onerror = () => rej(r.error) }) },
-  get(k) { return new Promise(res => { const t = this.db.transaction('kv').objectStore('kv').get(k); t.onsuccess = () => res(t.result); t.onerror = () => res(null) }) },
-  set(k, v) { return new Promise(res => { const t = this.db.transaction('kv', 'readwrite').objectStore('kv').put(v, k); t.onsuccess = () => res(); t.onerror = () => res() }) }
-};
-const Local = {
-  kind: 'local', label: 'Synced folder (this PC)', root: null,
-  sp(p) { return p.split('/').filter(Boolean) },
-  async dir(a, create) { let d = this.root; for (const x of a) d = await d.getDirectoryHandle(x, { create }); return d },
-  async fh(p, create) { const a = this.sp(p); return (await this.dir(a.slice(0, -1), create)).getFileHandle(a.at(-1), { create }) },
-  async read(p) { try { const f = await (await this.fh(p)).getFile(); return { text: await f.text(), etag: String(f.lastModified) } } catch (e) { return null } },
-  async readText(p) { return (await this.read(p))?.text ?? null },
-  async etagOf(p) { try { return String((await (await this.fh(p)).getFile()).lastModified) } catch (e) { return null } },
-  async getBlob(p) { return (await this.fh(p)).getFile() },
-  async put(p, b, etag) { const h = await this.fh(p, true); if (etag && String((await h.getFile()).lastModified) !== etag) throw Object.assign(new Error('conflict'), { conflict: true }); const w = await h.createWritable(); await w.write(b); await w.close(); return String((await h.getFile()).lastModified) },
-  writeText(p, t, e) { return this.put(p, new Blob([t]), e) }, writeBlob(p, b) { return this.put(p, b) },
-  async list(p) { const out = []; let d; try { d = await this.dir(this.sp(p)) } catch (e) { return out } for await (const [n, h] of d.entries()) { if (h.kind === 'directory') out.push({ name: n, dir: true }); else { try { const f = await h.getFile(); out.push({ name: n, size: f.size, modified: f.lastModified }) } catch (e) { out.push({ name: n, size: 0, modified: 0, offline: true }) } } } return out },
-  async remove(p) { try { const a = this.sp(p); await (await this.dir(a.slice(0, -1))).removeEntry(a.at(-1)); return true } catch (e) { return false } },
-  linkFor(p) { return `https://${C.siteHost}${C.sitePath}/Shared%20Documents/` + p.split('/').map(encodeURIComponent).join('/') }
-};
+/* ---------------- Active storage ---------------- */
 let Store = null;
 async function walk(p, depth = 6) { const out = []; for (const i of await Store.list(p)) { const q = p + '/' + i.name; if (i.dir) { if (depth > 0) out.push(...await walk(q, depth - 1)) } else out.push({ ...i, path: q }) } return out }
 async function moveFile(p, toDir) { const b = await Store.getBlob(p); await Store.writeBlob(toDir + '/' + p.split('/').at(-1), b); await Store.remove(p) }
@@ -525,7 +512,7 @@ async function runScan(quiet) {
   } catch (e) { if (e.auth) return needSignIn(e.message); toast('Scan failed: ' + e.message) }
 }
 function renderImport() {
-  $('connState').innerHTML = `<span class="pill p-paid">Connected</span> ${esc(Store.label)}${Auth.tok?.user && Store === Cloud ? ' as <b>' + esc(Auth.tok.user) + '</b>' : ''} · <code>Portal/</code> read/write · <code>Properties/</code> read only`;
+  $('connState').innerHTML = `<span class="pill p-paid">Connected</span> ${esc(Store.label)}${Auth.tok?.user && Store === Cloud ? ' as <b>' + esc(Auth.tok.user) + '</b>' : ''} · authenticated private data`;
   const sc = window._scan; if (!sc) { $('scanOut').innerHTML = '<div class="empty">Scanning…</div>'; return }
   const byFolder = {}; sc.pending.forEach(f => (byFolder[f.folder] ||= []).push(f));
   $('scanOut').innerHTML = `<div class="row" style="gap:16px;margin-bottom:12px"><span>Scanned ${sc.at.toLocaleTimeString('en-AU')}</span><span>${sc.files.length} files</span><span class="amber">${sc.pending.length} new PDFs</span></div>` +
@@ -593,7 +580,7 @@ function agentHealth() {
 function agentHealthHtml(compact) {
   const h = agentHealth(), ib = Inbox.items.length + (window._tbPending || []).length;
   const pill = { ok: ['p-paid', 'Healthy'], warn: ['p-soon', 'Warnings'], error: ['p-over', 'Last run failed'], stale: ['p-over', `No run in ${S.settings.agentStaleDays}+ days`] };
-  return (h.agents.length ? h.agents.map(a => `<div class="list-item"><div class="date-chip">🤖</div><div class="grow"><b>${esc(a.name)}</b> <span class="pill ${pill[a.state][0]}">${pill[a.state][1]}</span><div class="muted sm">Last run ${ago(a.last.finished)}${a.last.trigger ? ' · ' + esc(a.last.trigger) : ''}${compact ? '' : ` · ${a.runs} runs, ${a.fails} failed`}</div>${a.last.errors.length && !compact ? `<div class="red sm">${a.last.errors.slice(0, 3).map(esc).join('<br>')}</div>` : ''}</div></div>`).join('') : `<div class="empty sm">No agent runs recorded yet. Agents report by writing to <code>Portal/data/agent-log/</code>.</div>`) + (ib ? `<div class="note">${ib} item(s) waiting in the inbox. <a href="#" onclick="go('inbox');return false">Review →</a></div>` : '');
+  return (h.agents.length ? h.agents.map(a => `<div class="list-item"><div class="date-chip">🤖</div><div class="grow"><b>${esc(a.name)}</b> <span class="pill ${pill[a.state][0]}">${pill[a.state][1]}</span><div class="muted sm">Last run ${ago(a.last.finished)}${a.last.trigger ? ' · ' + esc(a.last.trigger) : ''}${compact ? '' : ` · ${a.runs} runs, ${a.fails} failed`}</div>${a.last.errors.length && !compact ? `<div class="red sm">${a.last.errors.slice(0, 3).map(esc).join('<br>')}</div>` : ''}</div></div>`).join('') : `<div class="empty sm">No agent runs recorded yet. Agents report by writing to <code>the private agent activity store</code>.</div>`) + (ib ? `<div class="note">${ib} item(s) waiting in the inbox. <a href="#" onclick="go('inbox');return false">Review →</a></div>` : '');
 }
 const quickOk = it => (it.data.confidence ?? 0) >= .9 && !it.warn.length && (it.pid || ['transaction', 'bill', 'info'].includes(it.data.kind));
 function renderInbox() {
@@ -833,10 +820,10 @@ async function exportAccountantPack() {
     let n = 0, skipped = 0;
     if ($('taxIncDocs')?.checked !== false) for (const d of X.docs.filter(d => d.include)) { try { $('expProg').textContent = 'Adding ' + d.name; root.file(`Supporting documents/${d.folder}/${d.rel}`, await Store.getBlob(d.path)); n++ } catch (e) { skipped++ } }
     $('expProg').textContent = 'Compressing…'; const blob = await z.generateAsync({ type: 'blob', compression: 'DEFLATE' });
-    const saveCopy = $('taxSaveCopy')?.checked !== false; if (saveCopy) { $('expProg').textContent = 'Saving copy to SharePoint…'; await Store.writeBlob(`${P_EXPORTS}/FY${X.fy}/${base}.xlsx`, wb); await Store.writeText(`${P_EXPORTS}/FY${X.fy}/Summary FY${X.fy}.html`, html); await Store.writeBlob(`${P_EXPORTS}/FY${X.fy}/${base}.zip`, blob) }
+    const saveCopy = $('taxSaveCopy')?.checked !== false; if (saveCopy) { $('expProg').textContent = 'Saving private copy…'; await Store.writeBlob(`${P_EXPORTS}/FY${X.fy}/${base}.xlsx`, wb); await Store.writeText(`${P_EXPORTS}/FY${X.fy}/Summary FY${X.fy}.html`, html); await Store.writeBlob(`${P_EXPORTS}/FY${X.fy}/${base}.zip`, blob) }
     download(base + '.zip', blob);
     log('Accountant pack exported', `FY${X.fy} · ${ENTITY[X.entity]} · ${X.props.length} properties · ${n} document(s)${skipped ? ` (${skipped} skipped)` : ''} · ${miss} missing item(s)`); save();
-    modal(`<h2>✅ Accountant pack ready</h2><p><b>${esc(base)}.zip</b> has been downloaded (${n} supporting PDF(s)${skipped ? `, ${skipped} skipped` : ''}).</p>${saveCopy ? `<div class="note info">A copy is in <b>Portal/exports/FY${X.fy}</b> – you can share that SharePoint folder with your accountant instead of emailing the zip.</div>` : ''}${miss ? `<div class="note warn">${miss} item(s) were missing – they're listed in the pack.</div>` : ''}<div class="row end" style="margin-top:14px"><button class="btn primary" onclick="closeModal()">Done</button></div>`);
+    modal(`<h2>✅ Accountant pack ready</h2><p><b>${esc(base)}.zip</b> has been downloaded (${n} supporting PDF(s)${skipped ? `, ${skipped} skipped` : ''}).</p>${saveCopy ? `<div class="note info">A private copy is available for FY${X.fy}</b>.</div>` : ''}${miss ? `<div class="note warn">${miss} item(s) were missing – they're listed in the pack.</div>` : ''}<div class="row end" style="margin-top:14px"><button class="btn primary" onclick="closeModal()">Done</button></div>`);
   } catch (e) { if (e.auth) return needSignIn(e.message); modal(`<h2>Export failed</h2><p class="muted">${esc(e.message)}</p><div class="row end"><button class="btn" onclick="closeModal()">Close</button></div>`) }
 }
 /* =====================================================================
@@ -928,32 +915,36 @@ function renderAll() {
 const msBtn = (label, fn) => `<button class="btn primary big ms" onclick="${fn}"><i><b style="background:#f25022"></b><b style="background:#7fba00"></b><b style="background:#00a4ef"></b><b style="background:#ffb900"></b></i>${label}</button>`;
 function gate(html) { $('gateBody').innerHTML = html; $('gate').style.display = 'flex' }
 function showSignIn(msg) {
-  const local = 'showDirectoryPicker' in window;
-  gate(`${msg ? `<div class="note warn" style="margin:0 0 14px">${esc(msg)}</div>` : ''}<p>Sign in with your Microsoft 365 account. Your data stays in the <b>CJPInvesments</b> SharePoint site.</p>
+  gate(`${msg ? `<div class="note warn" style="margin:0 0 14px">${esc(msg)}</div>` : ''}<p class="muted">Sign in with your Microsoft account to access your private property and financial dashboard.</p>
   <div class="row" style="margin-top:14px">${msBtn('Sign in with Microsoft', 'Auth.login()')}</div>
-  ${local ? `<details style="margin-top:22px"><summary class="muted sm">Use the synced folder on this PC instead</summary><p class="muted sm">Select <b>CJP Invesments - Documents</b> (the folder that contains Portal and Properties).</p><button class="btn" onclick="connectLocal()">📁 Choose folder</button></details>` : ''}`);
+  <div class="muted sm" style="margin-top:18px">🔒 Authentication required. Financial information is not available until sign-in is complete.</div>`);
 }
-function needSignIn(msg) { Store = null; showSignIn(msg || 'Please sign in again.') }
-function signOut() { if (Store === Cloud) Auth.logout(); else location.reload() }
-async function connectLocal() {
-  try { Local.root = await window.showDirectoryPicker({ id: 'cjp-docs', mode: 'readwrite' }) } catch (e) { return }
-  const names = (await Local.list('')).map(i => i.name);
-  if (!names.includes('Portal') || !names.includes('Properties')) { if (!confirm(`"${Local.root.name}" doesn't contain both Portal and Properties folders.\nUse it anyway?`)) return }
-  await IDB.open().catch(() => { }); await IDB.set('root', Local.root).catch(() => { }); Store = Local; await afterConnect();
+function showStorageSetup(msg) {
+  gate(`<h2 style="margin-top:0">Complete private setup</h2>${msg ? `<div class="note warn" style="margin:0 0 14px">${esc(msg)}</div>` : ''}
+  <p class="muted">This one-time step securely links this browser after Microsoft authentication. The location is not published with the website.</p>
+  <label>Private Microsoft 365 site URL</label><input id="privateSiteUrl" type="url" autocomplete="off" placeholder="https://tenant.sharepoint.com/sites/private-site">
+  <div class="row end" style="margin-top:14px"><button class="btn" onclick="Auth.logout()">Sign out</button><button class="btn primary" id="privateSiteGo">Connect private storage</button></div>`);
+  $('privateSiteGo').onclick = async () => {
+    const b=$('privateSiteGo'); b.disabled=true; b.textContent='Connecting…';
+    try { Store=Cloud; await Cloud.configure($('privateSiteUrl').value); await afterConnect(); }
+    catch(e){ showStorageSetup(e.message); }
+  };
 }
+function needSignIn() { Store = null; showSignIn('Your session has expired or access could not be verified. Please sign in again.') }
+function signOut() { Auth.logout() }
 async function afterConnect() {
   gate('<div class="muted">Loading your data…</div>');
-  try { if (!(await loadData())) return firstRun() } catch (e) { if (e.auth) return needSignIn(e.message); return gate(`<div class="note warn" style="margin:0">Couldn't read <code>${P_DATA}</code>: ${esc(e.message)}</div><p class="muted sm">If the file is damaged, restore a copy from <code>${P_BACKUP}</code> in SharePoint (or its version history).</p><button class="btn" onclick="location.reload()">Retry</button>`) }
-  $('gate').style.display = 'none'; $('whoAmI').textContent = Store === Cloud ? (Auth.tok?.user || '') : 'Synced folder';
+  try { if (!(await loadData())) return firstRun() } catch (e) { if (e.auth) return needSignIn(); return gate(`<div class="note warn" style="margin:0">Private data could not be loaded.</div><p class="muted sm">Try again. If the problem continues, use the Microsoft 365 document version history from an authenticated session.</p><button class="btn" onclick="location.reload()">Retry</button>`) }
+  $('gate').style.display = 'none'; $('whoAmI').textContent = Auth.tok?.user || '';
   setSync('Loaded ' + (S.updated ? fdt(S.updated) : '')); await loadCovers(); renderAll();
   await checkAgents(false); await runScan(true);
-  log('Portal opened', `${Store.label} · ${Inbox.items.length} inbox item(s)`, { actor: 'portal' }); saveData();
+  log('Portal opened', `${Inbox.items.length} inbox item(s)`, { actor: 'portal' }); saveData();
   if (!window._timers) { window._timers = 1; setInterval(() => { if (!document.hidden && Store) checkAgents(false) }, 5 * 60 * 1000); document.addEventListener('visibilitychange', () => { if (!document.hidden) refreshIfChanged() }) }
 }
 function firstRun() {
-  gate(`<h2 style="margin-top:0">Welcome – first-time setup</h2><p class="muted">Connected to ${esc(Store.label)}, but there's no portal data yet (<code>${P_DATA}</code>).</p>
-  <div class="card" style="margin:12px 0"><b>Load your starter file</b><div class="muted sm" style="margin:6px 0 10px">Choose <code>starter-data.json</code> from the v5.0 download. It contains your properties, loans, bills and recent transactions and is saved straight to SharePoint – it's never uploaded to the website.</div><label class="btn primary" style="margin:0;text-transform:none;letter-spacing:0;font-size:14px;color:#fff">Choose starter-data.json<input type="file" accept=".json,application/json" hidden onchange="loadStarter(this)"></label></div>
-  <div class="card"><b>Or start empty</b><div class="muted sm" style="margin:6px 0 10px">Add properties and bills yourself, or import a TimelyBills report.</div><button class="btn" onclick="startEmpty()">Start empty</button></div>`);
+  gate(`<h2 style="margin-top:0">Welcome – first-time setup</h2><p class="muted">The private data store is connected, but no portal data file exists yet.</p>
+  <div class="card" style="margin:12px 0"><b>Load a starter file</b><div class="muted sm" style="margin:6px 0 10px">Choose a local starter-data.json backup. It is written directly to the authenticated private data store and is not uploaded to the public website.</div><label class="btn primary" style="margin:0;text-transform:none;letter-spacing:0;font-size:14px;color:#fff">Choose starter-data.json<input type="file" accept=".json,application/json" hidden onchange="loadStarter(this)"></label></div>
+  <div class="card"><b>Or start empty</b><div class="muted sm" style="margin:6px 0 10px">Add properties and bills manually or import your existing records.</div><button class="btn" onclick="startEmpty()">Start empty</button></div>`);
 }
 async function loadStarter(inp) {
   const f = inp.files[0]; if (!f) return;
@@ -962,12 +953,10 @@ async function loadStarter(inp) {
 }
 async function startEmpty() { S = emptyData(); log('Portal data created', 'Started empty', { actor: 'portal' }); etag = null; lastText = null; await saveData(); await afterConnect() }
 async function boot() {
-  if (!C.clientId || !C.tenant) return gate('<div class="note warn" style="margin:0">config.js is missing clientId / tenant.</div>');
   try {
-    if (await Auth.handleRedirect()) { Store = Cloud; await Cloud.init(); return afterConnect() }
-    if (Auth.tok) { Store = Cloud; await Cloud.init(); return afterConnect() }
-  } catch (e) { return showSignIn(e.message) }
-  if ('showDirectoryPicker' in window && new URLSearchParams(location.search).has('local')) { try { await IDB.open(); const h = await IDB.get('root'); if (h && (await h.requestPermission({ mode: 'readwrite' })) === 'granted') { Local.root = h; Store = Local; return afterConnect() } } catch (e) { } }
+    const redirected = await Auth.handleRedirect();
+    if (redirected || Auth.tok) { Store = Cloud; try { await Cloud.init(); return afterConnect() } catch(e) { if (e.setup) return showStorageSetup(e.message); throw e; } }
+  } catch (e) { return showSignIn('We could not complete sign-in. Please try again.') }
   showSignIn();
 }
 window.addEventListener('beforeunload', e => { if (saving || saveT) { saveData(); e.preventDefault(); e.returnValue = '' } });
