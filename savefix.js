@@ -30,9 +30,10 @@
   }
   async function retry(){showRetry(false);for(let i=0;i<=RETRY.length;i++){let ok=await attempt(true);if(ok){if(typeof toast==='function')toast('Saved to SharePoint');return true}if(i<RETRY.length)await new Promise(r=>setTimeout(r,RETRY[i]))}showRetry(true,lastError);if(typeof toast==='function')toast('Save still failed. Recovery copy kept in this browser session.');return false}
   function install(){
-    controls();if(typeof saveData!=='function'||original)return;original=saveData;
-    saveData=attempt;
-    // Replace rapid-fire add-on saves with one serialised queue.
+    controls();if(typeof saveData!=='function'||original)return;
+    original=saveData.bind(window);
+    // Do NOT replace saveData. app.js save() calls saveData(), and replacing both can recurse.
+    // Instead only replace the debounced convenience save() used by add-ons.
     if(typeof save==='function')save=function(){clearTimeout(timer);snapshot('pending local change');timer=setTimeout(()=>attempt(false),650);try{if(typeof renderAll==='function')renderAll()}catch(e){}};
     let obs=new MutationObserver(()=>{if(failed()){snapshot(statusText());showRetry(true,statusText())}});if(el('syncState'))obs.observe(el('syncState'),{childList:true,characterData:true,subtree:true});
     let rec=null;try{rec=JSON.parse(sessionStorage.getItem(REC)||'null')}catch(e){}if(rec&&rec.data){showRetry(true,'Unsaved recovery from '+rec.at);setState('⚠ Unsaved recovery available');}
