@@ -5,7 +5,7 @@
 <meta name="referrer" content="no-referrer"><meta name="robots" content="noindex,nofollow"><meta name="theme-color" content="#0b1020"><meta name="apple-mobile-web-app-capable" content="yes"><meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <title>CJP Investments Portal</title><link rel="manifest" href="manifest.webmanifest"><link rel="apple-touch-icon" href="images/icon-192.png"><link rel="stylesheet" href="app.css">
 </head><body>
-<div class="gate" id="gate"><div class="card"><div class="brand" style="margin:0 0 16px"><div class="logo">CJ</div><div><b>CJP Investments Portal</b><small>v5.5</small></div></div><div id="gateBody"><div class="muted">Loading…</div></div></div></div>
+<div class="gate" id="gate"><div class="card"><div class="brand" style="margin:0 0 16px"><div class="logo">CJ</div><div><b>CJP Investments Portal</b><small>v5.5.1</small></div></div><div id="gateBody"><div class="muted">Loading…</div></div></div></div>
 <header class="mbar"><div class="logo">CJ</div><div class="mtitle" id="mTitle">Dashboard</div><span class="msync" id="mSync"></span></header>
 <div class="app"><nav><div class="brand"><div class="logo">CJ</div><div><b>CJP Investments</b><small>Portfolio portal</small></div></div><div id="navList"></div><div class="sync"><div>☁ <span id="syncState">—</span></div><div id="whoAmI"></div><button class="btn sm" style="margin-top:8px" onclick="signOut()">Sign out</button></div></nav><main>
 <section class="view active" id="v-dashboard"><header class="top"><div><h1>Dashboard</h1><div class="sub2" id="todayLbl"></div></div><div class="row"><button class="btn" onclick="openBill()">+ Bill</button><button class="btn" onclick="openTxn()">+ Expense</button><button class="btn primary" onclick="checkAgents(true)">📬 Check inbox</button></div></header><div class="grid k5" id="kpis"></div><div class="grid c2" style="margin-top:16px"><div class="card"><div class="row sp"><h2>Upcoming &amp; overdue bills</h2><button class="btn sm" onclick="go('bills')">All bills →</button></div><div id="dashBills"></div></div><div class="grid" style="align-content:start"><div class="card"><div class="row sp"><h2>Agents</h2><button class="btn sm" onclick="go('activity')">Activity →</button></div><div id="dashAgents"></div></div><div class="card"><div class="row sp"><h2 id="dashMgTitle">Mortgage</h2><button class="btn sm" onclick="go('mortgage')">Analytics →</button></div><div id="dashMortgage"></div></div></div></div><div class="grid c3" style="margin-top:16px" id="dashProps"></div></section>
@@ -27,6 +27,7 @@
 <script src="bankimport.js"></script>
 <script src="accountmatch.js"></script>
 <script src="mappingrepair.js"></script>
+<script src="accountpreset.js"></script>
 <script src="moneyinsights.js"></script>
 <script src="restoreignored.js"></script>
 </body></html>
