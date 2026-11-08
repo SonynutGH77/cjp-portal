@@ -5,7 +5,8 @@
 const APP_VER = '6.5.4';
 const C = Object.freeze({
   clientId: 'f0aadf0f-e8d9-4698-ae0b-c9cb3ba23bfb',
-  tenant: 'fca9cce9-dd25-4940-bcde-820d1ec34cfe'
+  tenant: 'fca9cce9-dd25-4940-bcde-820d1ec34cfe',
+  owner: 'ea29dda3-ebc8-4556-b818-c615484f2807'
 });
 const P_DATA = 'Portal/data/portal-data.json', P_BACKUP = 'Portal/data/backups', P_INBOX = 'Portal/data/inbox', P_LOG = 'Portal/data/agent-log', P_TB = 'Portal/data/inbox/timelybills', P_EXPORTS = 'Portal/exports', P_IMAGES = 'Portal/images', P_PROPS = 'Properties';
 const ACTIVITY_MAX = 1500;
@@ -19,11 +20,12 @@ const Auth = {
   get tok() { try { return JSON.parse(sessionStorage.getItem(this.key)) } catch (e) { return null } },
   set tok(v) { v ? sessionStorage.setItem(this.key, JSON.stringify(v)) : sessionStorage.removeItem(this.key) },
   b64u(buf) { return btoa(String.fromCharCode(...new Uint8Array(buf))).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '') },
-  async login() {
+  async login(prompt) {
     const v = this.b64u(crypto.getRandomValues(new Uint8Array(32))), st = this.b64u(crypto.getRandomValues(new Uint8Array(16)));
     const ch = this.b64u(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(v)));
     sessionStorage.setItem('cjp.pkce', JSON.stringify({ v, st }));
     const q = new URLSearchParams({ client_id: C.clientId, response_type: 'code', redirect_uri: this.redirect(), response_mode: 'query', scope: this.scope, state: st, code_challenge: ch, code_challenge_method: 'S256' });
+    if (prompt) q.set('prompt', prompt);
     location.assign(this.base() + '/authorize?' + q);
   },
   async handleRedirect() {
@@ -40,10 +42,16 @@ const Auth = {
     const r = await fetch(this.base() + '/token', { method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, body: new URLSearchParams({ client_id: C.clientId, scope: this.scope, ...body }) });
     const j = await r.json().catch(() => ({}));
     if (!r.ok) throw new Error(j.error_description || j.error || 'Sign-in failed');
-    const old = this.tok || {};
-    this.tok = { at: j.access_token, rt: j.refresh_token || old.rt, exp: Date.now() + ((j.expires_in || 3600) - 120) * 1000, user: this.claim(j.id_token) || old.user };
+    const old = this.tok || {}, w = this.identify(j.id_token), id = { oid: w.oid || old.oid, tid: w.tid || old.tid, user: w.user || old.user };
+    const bad = this.verdict(id);   // fails closed: nothing is stored and no storage call is made for anyone else
+    if (bad) { this.tok = null; throw Object.assign(new Error('Access denied'), { denied: bad }); }
+    this.tok = { at: j.access_token, rt: j.refresh_token || old.rt, exp: Date.now() + ((j.expires_in || 3600) - 120) * 1000, user: id.user, oid: id.oid, tid: id.tid };
     return this.tok.at;
   },
+  // The id_token arrives straight from the token endpoint over TLS, so its claims are read, not signature-checked (OIDC Core 3.1.3.7).
+  identify(id) { try { const p = JSON.parse(atob(id.split('.')[1].replace(/-/g, '+').replace(/_/g, '/'))); return { oid: p.oid, tid: p.tid, user: p.preferred_username || p.name } } catch (e) { return {} } },
+  verdict(w) { if (!w || !w.oid || !w.tid) return 'claims'; if (w.tid !== C.tenant) return 'tenant'; if (w.oid !== C.owner) return 'user'; return '' },
+  verified() { const t = this.tok; return !!t && !this.verdict(t) },
   claim(id) { try { const p = JSON.parse(atob(id.split('.')[1].replace(/-/g, '+').replace(/_/g, '/'))); return p.preferred_username || p.name } catch (e) { return null } },
   async access() {
     const t = this.tok; if (!t) throw Object.assign(new Error('Not signed in'), { auth: true });
@@ -953,11 +961,18 @@ async function loadStarter(inp) {
   catch (e) { toast('Could not load file: ' + e.message) }
 }
 async function startEmpty() { S = emptyData(); log('Portal data created', 'Started empty', { actor: 'portal' }); etag = null; lastText = null; await saveData(); await afterConnect() }
+function showDenied(code) {
+  Store = null;
+  gate(`<div class="note warn" style="margin:0 0 14px"><b>Access denied</b></div><p class="muted" style="margin:0 0 14px">This account is not authorised to use this portal.</p>
+  <div class="row"><button class="btn primary" onclick="Auth.login('select_account')">Use a different account</button><button class="btn" onclick="Auth.logout()">Sign out</button></div>
+  <div class="muted sm" style="margin-top:18px">Reference: ${esc(code || 'denied')}</div>`);
+}
 async function boot() {
+  if (Auth.tok && !Auth.verified()) Auth.tok = null;   // a session from before the identity check: sign in again
   try {
     const redirected = await Auth.handleRedirect();
     if (redirected || Auth.tok) { Store = Cloud; try { await Cloud.init(); return afterConnect() } catch(e) { if (e.setup) return showStorageSetup(e.message); throw e; } }
-  } catch (e) { return showSignIn('We could not complete sign-in. Please try again.') }
+  } catch (e) { if (e && e.denied) return showDenied(e.denied); return showSignIn('We could not complete sign-in. Please try again.') }
   showSignIn();
 }
 window.addEventListener('beforeunload', e => { if (saving || saveT) { saveData(); e.preventDefault(); e.returnValue = '' } });
