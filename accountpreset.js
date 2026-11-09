@@ -1,4 +1,4 @@
-/* CJP Portal v5.5.1 - authoritative Macquarie account presets
+/* CJP Portal v5.5.2 - authoritative Macquarie account presets
    Creates/updates account identity mappings only. NO balances or transactions are invented.
    Safe/idempotent: can run before bank statements are imported.
 */
@@ -11,7 +11,7 @@
     {accountNumber:'019172048',last4:'2048',name:'Macquarie Online Purchases ••••2048',type:'everyday',propertyId:'',role:'online-purchases'},
     {accountNumber:'018939124',last4:'9124',name:'Macquarie Collins Wharf Equity Split ••••9124',type:'loan',propertyId:'p2',securedPropertyId:'p1',purposePropertyId:'p2',role:'investment-equity-split'},
     {accountNumber:'000972793269',last4:'3269',name:'Macquarie SMSF Cash Management ••••3269',type:'smsf',propertyId:'p3',role:'smsf-cash'},
-    {accountNumber:'000941433997',last4:'3997',name:'Macquarie SMSF Cash Management Accelerator ••••3997',type:'smsf',propertyId:'p3',role:'smsf-accelerator'}
+    {accountNumber:'000941433997',last4:'3997',name:'Macquarie SMSF Accelerator ••••3997',type:'smsf',propertyId:'p3',role:'smsf-accelerator'}
   ];
   const norm=v=>String(v||'').replace(/\D/g,'');
   function apply(){
@@ -46,5 +46,11 @@
     if(changed&&typeof save==='function')save();
   }
   window.CJPAccountPreset={apply,presets:PRESETS};
-  if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',()=>setTimeout(apply,1400));else setTimeout(apply,1400);
+  // v5.5.2: keep trying until the portal data has loaded (e.g. after the encrypted vault is unlocked), instead of one attempt at 1.4s
+  let tries=0;
+  function boot(){
+    if(typeof S!=='undefined'&&S?.settings){apply();return}
+    if(++tries<80)setTimeout(boot,1500);
+  }
+  if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',()=>setTimeout(boot,1400));else setTimeout(boot,1400);
 })();
