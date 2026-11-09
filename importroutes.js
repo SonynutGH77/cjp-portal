@@ -1,4 +1,4 @@
-/* CJP Portal - importroutes.js v1.0 (add-on, load AFTER bankimport.js, rapidrepay.js and macquariereports.js)
+/* CJP Portal - importroutes.js v1.1 (add-on, load AFTER bankimport.js, rapidrepay.js and macquariereports.js)
    Fixes how the "Waiting in SharePoint" list on Statements & imports behaves. Nothing in app.js, bankimport.js or rapidrepay.js is edited.
    1. The list is split into separate groups: Bank statements / Macquarie reports / Infinity Rapid Repay reports / TimelyBills.
    2. Import on a Macquarie report (proof of balance, financial year interest, tax transactions) opens the Macquarie report reader,
@@ -18,6 +18,7 @@
     ['rr', '\uD83C\uDFE6 Infinity Rapid Repay reports'],
     ['tb', '\uD83E\uDDFE TimelyBills']
   ];
+  const esc = v => String(v == null ? '' : v).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
   const warn = (what, e) => { try { console.warn('importroutes.js: ' + what, e); } catch (x) { } };
 
   /* ---- 1+2: route Import ---- */
@@ -60,29 +61,33 @@
     window.RR.__wrapped = true; return true;
   }
 
-  /* ---- 1+3: regroup the waiting list ---- */
-  function regroup() {
-    const el = document.getElementById('wfList'); if (!el) return;
-    const tbl = [...el.children].find(c => c.tagName === 'TABLE');
-    if (!tbl) return;                                        // empty message, or already regrouped
-    const done = (typeof S !== 'undefined' && S && S.macReports) || {};
+  /* ---- 1+3: regroup the waiting list ----
+     v1.1: builds the grouped list from bankimport.js's own pending-file data (BI.pendingFiles) instead of re-reading the page,
+     and only runs once per redraw (a hidden marker is removed whenever bankimport.js redraws the list). v1.0 re-read its own output and repeated the headings. */
+  function build(P, done) {
     const buckets = { bank: [], mq: [], rr: [], tb: [] };
-    [...tbl.querySelectorAll('tr')].forEach(tr => {
-      const b = tr.querySelector('button[onclick^="BI.wImport"]'), m = b && b.getAttribute('onclick').match(/BI\.wImport\('([^']*)'\)/);
-      const path = m ? decodeURIComponent(m[1]) : '', k = kindOfPath(path);
+    P.forEach(x => {
+      const path = String(x.path || '');
+      let k = x.kind === 'rr' ? 'rr' : x.kind === 'tb' ? 'tb' : kindOfPath(path);
       if (k === 'mq' && done[path]) return;                  // already imported through the Macquarie report reader
-      buckets[k].push(tr);
+      buckets[k].push(x);
     });
     const total = GROUPS.reduce((n, [k]) => n + buckets[k].length, 0);
-    const head = el.querySelector('b'); if (head) head.textContent = '\uD83D\uDCC1 Waiting in SharePoint (' + total + ')';
-    tbl.remove();
-    if (!total) { el.insertAdjacentHTML('beforeend', '<div class="muted sm">Nothing new waiting. Macquarie reports already imported are listed in the Macquarie reports card below.</div>'); return; }
+    const row = x => '<tr><td>\uD83D\uDCC4 ' + esc(String(x.path).replace(/^Portal\//, '')) + '<div class="muted sm">' + esc(x.label || '') + (x.modified ? ' \u00b7 ' + new Date(x.modified).toLocaleDateString('en-AU') : '') + '</div></td><td class="nowrap" style="text-align:right"><button class="btn sm primary" onclick="BI.wImport(\'' + encodeURIComponent(x.path) + '\')">Import</button> <button class="btn sm" onclick="BI.wIgnore(\'' + encodeURIComponent(x.path) + '\')">Ignore</button></td></tr>';
+    let html = '<span id="wfGrouped" hidden></span><div class="row sp" style="margin-top:12px"><b>\uD83D\uDCC1 Waiting in SharePoint (' + total + ')</b><button class="btn sm" onclick="BI.scan()">\u21BB Check folders</button></div>';
+    if (!total) return html + '<div class="muted sm">Nothing new waiting. Macquarie reports already imported are listed in the Macquarie reports card below.</div>';
     GROUPS.forEach(([k, title]) => {
       if (!buckets[k].length) return;
-      el.insertAdjacentHTML('beforeend', '<div class="row sp wfGroup" style="margin-top:14px"><b>' + title + ' (' + buckets[k].length + ')</b></div><table class="stack wfGroup" data-wfg="' + k + '"><tbody></tbody></table>');
-      const body = el.querySelector('table[data-wfg="' + k + '"] tbody');
-      buckets[k].forEach(tr => body.appendChild(tr));
+      html += '<div style="margin-top:14px"><b>' + title + ' (' + buckets[k].length + ')</b></div><table class="stack">' + buckets[k].map(row).join('') + '</table>';
     });
+    return html;
+  }
+  function regroup() {
+    const el = document.getElementById('wfList'); if (!el) return;
+    if (el.querySelector('#wfGrouped')) return;             // already grouped since the last redraw
+    if (!window.BI || !Array.isArray(window.BI.pendingFiles)) return;
+    if (!el.querySelector('table.stack')) return;           // bankimport.js shows its own "nothing new" message
+    el.innerHTML = build(window.BI.pendingFiles, (typeof S !== 'undefined' && S && S.macReports) || {});
   }
 
   let t = null;
@@ -92,5 +97,5 @@
     new MutationObserver(later).observe(document.body, { childList: true, subtree: true });
   }
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', start); else start();
-  window.CJPImportRoutes = { version: '1.0', kindOfPath, regroup };
+  window.CJPImportRoutes = { version: '1.1', kindOfPath, regroup, build };
 })();
