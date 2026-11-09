@@ -14,7 +14,7 @@
    Nothing in app.js is edited. This file adds its own card and review screen and only wraps renderImport. */
 (() => {
   'use strict';
-  const VER = '1.1';
+  const VER = '1.2';
   const ROOT = 'Portal/Bank Statements';
   const NAME_RE = /interest[-_ ]?report|proof[-_ ]?of[-_ ]?balance|tax[-_ ]?transaction/i;
   const MON = ['january', 'february', 'march', 'april', 'may', 'june', 'july', 'august', 'september', 'october', 'november', 'december'];
@@ -186,6 +186,9 @@
   /* ---------- applying ---------- */
   function applyBalance(rep, maps) {
     const done = [], offs = {}; let n = 0;
+    // v1.2: keep the Macquarie figure for EVERY account in the report (even ones not mapped to a loan), so the Dashboard can show it and check the loan against it
+    S.macBalances = S.macBalances || {};
+    rep.rows.forEach(r => { const k = stripZ(r.acct), o = S.macBalances[k]; if (!o || String(o.asAt || '') <= String(rep.asAt || '9999')) S.macBalances[k] = { asAt: rep.asAt || '', balance: r.balance, cd: r.cd, available: r.available }; });
     rep.rows.forEach(r => {
       const v = maps[r.acct] || ''; if (!v.startsWith('loan:') && !v.startsWith('off:')) return;
       const x = findLoan(v.slice(v.indexOf(':') + 1)); if (!x) return;
@@ -319,5 +322,5 @@
   /* ---------- hook into app.js ---------- */
   const warn = (what, e) => { try { console.warn('macquariereports.js: could not hook ' + what, e); } catch (x) { } };
   try { const o = renderImport; renderImport = function () { o.apply(this, arguments); try { mqPaint(); mqScan(false); } catch (e) { warn('card', e); } }; } catch (e) { warn('renderImport', e); }
-  g().PortalMacquarie = { version: VER, parseReport, parseBalance, parseInterest, parseTaxTx, acctRows, totalRow, suggest, read: mqRead, kindOf };
+  g().PortalMacquarie = { version: VER, parseReport, parseBalance, parseInterest, parseTaxTx, acctRows, totalRow, suggest, applyBalance, read: mqRead, kindOf };
 })();

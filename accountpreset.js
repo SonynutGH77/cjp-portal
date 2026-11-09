@@ -1,4 +1,4 @@
-/* CJP Portal v5.6 - authoritative account presets (Macquarie + the Arthurmac SMSF loan on The Canopy)
+/* CJP Portal v5.7 - authoritative account presets (Macquarie + the Arthurmac SMSF loan on The Canopy)
    Creates/updates account identity mappings only. NO balances or transactions are invented.
    Safe/idempotent: can run before bank statements are imported.
 */
@@ -47,6 +47,19 @@
       a.identifiers={...(a.identifiers||{}),accountNumber:p.accountNumber,last4:p.last4,bank:p.bank||'macquarie'};
       a.match=[...new Set([...(a.match||[]),p.accountNumber,...(p.fullMatchOnly?[]:[p.last4])])];
       if(p.loanLast4&&homeLoan)a.loanId=homeLoan.id;
+      // v5.7: tie each Macquarie LOAN account to its loan record (and write the account number on the record) so statements, reports and the Dashboard all agree.
+      // The equity split's loan record sits on the property that SECURES it (8 Neale Street) even though the money was used for Collins Wharf.
+      if(p.type==='loan'&&!p.propertyMatch){
+        const sec=(S.properties||[]).find(x=>x.id===(p.securedPropertyId||p.propertyId));
+        let ln=sec?.loans?.find(l=>norm(l.acct)===p.accountNumber)
+          ||(p.role==='investment-equity-split'?sec?.loans?.find(l=>/equity|collins/i.test(l.name||'')&&!norm(l.acct)):null)
+          ||(p.role==='home-loan'?homeLoan:null);
+        if(ln){
+          if(norm(ln.acct)!==p.accountNumber){ln.acct=p.accountNumber;changed++}
+          if(p.role==='investment-equity-split'&&!ln.purposePropertyId&&p.purposePropertyId){ln.purposePropertyId=p.purposePropertyId;changed++}
+          a.loanId=ln.id;
+        }
+      }
       if(p.securedPropertyId)a.securedPropertyId=p.securedPropertyId;
       if(p.purposePropertyId)a.purposePropertyId=p.purposePropertyId;
       if(JSON.stringify(a)!==before)changed++;
@@ -57,7 +70,7 @@
       onlinePurchases:'019172048',
       updatedAt:new Date().toISOString()
     };
-    S.settings.macquarieAccountPreset='2026-11-09-v2';
+    S.settings.macquarieAccountPreset='2026-11-09-v3';
     if(changed&&typeof log==='function')log('Macquarie account mappings updated','Salary & Bills ••••8993; Food/Fun/Fuel ••••9132; Online Purchases ••••2048; Home Loan ••••9207; Collins equity split ••••9124; SMSF ••••3269/3997; Arthurmac SMSF loan ••••6385 (The Canopy).',{actor:'system',status:'ok'});
     if(changed&&typeof save==='function')save();
   }

@@ -1,4 +1,4 @@
-/* CJP Portal - dashboardloans.js v1.1 (add-on, works with app.js v6.5.x)
+/* CJP Portal - dashboardloans.js v1.3 (add-on, works with app.js v6.5.x)
    A "Loans & interest" card on the Dashboard so the current position is always on screen. One row per loan on every property you still hold.
    Where each figure comes from (nothing is estimated):
      - balance / offset ........ the loan record (updated by the Macquarie proof of balance and statements)
@@ -43,11 +43,14 @@
   const isMacLoan = acct => !!acct && ((typeof window !== 'undefined' && window.CJPAccountPreset && window.CJPAccountPreset.presets) || []).some(p => stripZ(p.accountNumber) === stripZ(acct));
 
   /* ---------- pure model (tested separately) ---------- */
-  function model(St, nowISO, fyOfFn, presets) {
+  const nickOf = n => String(n || '').replace(/^Macquarie\s+/i, '').replace(/\s*[\u2022*]+\d{4}\s*$/, '').trim();
+  function model(St, nowISO, fyOfFn, presets, lenders) {
     const fy = fyOfFn(nowISO), pf = prevFY(fy), TY = St.taxYears || {};
     const reps = Object.values(St.macReports || {});
     const latest = k => reps.filter(r => r.kind === k && r.asAt).sort((a, b) => String(b.asAt).localeCompare(String(a.asAt)))[0] || null;
     const macAcct = a => !!a && (presets || []).some(p => stripZ(p.accountNumber) === stripZ(a));
+    const preFor = a => !a ? null : (presets || []).concat(lenders || []).find(p => stripZ(p.accountNumber) === stripZ(a)) || null;
+    const snapFor = a => a ? ((St.macBalances || {})[stripZ(a)] || null) : null;
     const rows = [];
     (St.properties || []).filter(p => !p.sold).forEach(p => (p.loans || []).forEach(l => {
       if (l.balance == null && l.rate == null && l.repay == null && !(l.rateChanges || []).length) return;
@@ -57,8 +60,14 @@
       const rate = F.rate ? F.rate.rate : (l.rate != null ? +l.rate : null);
       const repay = F.repay ? F.repay.repay : (l.repay != null ? +l.repay : null);
       const interestM = (bal != null && rate != null && bal > 0) ? Math.round(bal * rate / 1200) : null;
+      const pre = preFor(l.acct), snap = snapFor(l.acct);
+      const purposeId = (pre && pre.purposePropertyId) || l.purposePropertyId || '', purposeP = purposeId && purposeId !== p.id ? (St.properties || []).find(x => x.id === purposeId) : null;
+      const isMac = macAcct(l.acct);
       rows.push({
-        p, l, last4: l.acct ? String(l.acct).slice(-4) : '', linked: !!l.acct, mac: macAcct(l.acct),
+        p, l, last4: l.acct ? String(l.acct).slice(-4) : '', linked: !!l.acct, mac: isMac,
+        disp: pre ? nickOf(pre.name) : (l.name || 'Loan'), lender: pre && pre.lender ? pre.lender : (isMac ? 'Macquarie' : ''), purpose: purposeP ? purposeP.name : '',
+        avail: l.available != null ? +l.available : null, snap,
+        balCheck: !isMac || !l.acct ? 'n/a' : !snap ? 'none' : (bal != null && snap.cd === 'DR' && Math.abs(bal - snap.balance) <= 1 ? 'ok' : 'differs'),
         bal, off, net: bal != null ? Math.round((bal - (off || 0)) * 100) / 100 : null,
         rate, rateFrom: F.rate ? F.rate.rateDate : null,
         rateMismatch: !!(F.rate && !eq(l.rate, F.rate.rate)), rateStored: l.rate != null ? +l.rate : null,
@@ -137,8 +146,8 @@
   function html(M, P) {
     const dash = '<span class="muted">\u2014</span>', amt = v => v == null ? dash : m0(v);
     if (!M.rows.length) return `<div class="card" id="dlCard" style="margin-top:16px"><div class="row sp"><h2>Loans &amp; interest</h2><button class="btn sm" onclick="go('mortgage')">Analytics \u2192</button></div><div class="empty">No loans recorded yet. Add them under each property (Edit) or import a Macquarie proof of balance.</div></div>`;
-    const body = M.rows.map(r => `<tr onclick="go('prop:${esc(r.p.id)}')" style="cursor:pointer"><td><b>${esc(r.l.name || 'Loan')}</b><div class="muted sm">${esc(r.p.name)}${r.last4 ? ' \u00b7 \u2022\u2022\u2022\u2022' + esc(r.last4) : ''}${entityOf(r.p) === 'smsf' ? ' \u00b7 SMSF' : ''}</div></td>` +
-      `<td class="num">${amt(r.bal)}</td><td class="num">${amt(r.off)}</td><td class="num"><b>${amt(r.net)}</b></td>` +
+    const body = M.rows.map(r => `<tr onclick="go('prop:${esc(r.p.id)}')" style="cursor:pointer"><td><b>${esc(r.disp)}</b><div class="muted sm">${esc(r.p.name)}${r.last4 ? ' \u00b7 \u2022\u2022\u2022\u2022' + esc(r.last4) : ''}${r.purpose ? ' \u00b7 used for ' + esc(r.purpose) : ''}${entityOf(r.p) === 'smsf' ? ' \u00b7 SMSF' : ''}</div></td>` +
+      `<td class="num">${amt(r.bal)}${r.avail != null ? `<div class="muted sm">available ${m0(r.avail)}</div>` : ''}${r.balCheck === 'ok' ? `<div class="muted sm">\u2713 Macquarie ${esc(fdate(r.snap.asAt))}</div>` : ''}${r.balCheck === 'differs' ? `<div class="amber sm">Macquarie ${esc(fdate(r.snap.asAt))}: ${r.snap.cd === 'DR' ? m0(r.snap.balance) : 'in credit'}</div>` : ''}${r.balCheck === 'none' ? '<div class="amber sm">not yet from Macquarie</div>' : ''}</td><td class="num">${amt(r.off)}</td><td class="num"><b>${amt(r.net)}</b></td>` +
       `<td class="num">${r.rate != null ? '<b>' + pc(r.rate) + '</b>' : dash}${r.rateFrom ? `<div class="muted sm">from ${esc(fdate(r.rateFrom))}</div>` : ''}${r.rateMismatch ? `<div class="amber sm">saved loan: ${pc(r.rateStored)}</div>` : ''}</td>` +
       `<td class="num">${r.repay != null ? (r.repayBad ? `<span class="amber">${money(r.repay)}</span>` : money(r.repay)) : dash}${r.repayBad ? `<div class="amber sm">too low: a month's interest is about ${m0(r.interestM)}</div>` : ''}${r.nextRepay ? `<div class="muted sm">${money(r.nextRepay.repay)} from ${esc(fdate(r.nextRepay.date))}</div>` : ''}${r.repayMismatch && !r.repayBad ? `<div class="amber sm">saved loan: ${money(r.repayStored)}</div>` : ''}</td>` +
       `<td class="num">${amt(r.intCur)}</td><td class="num">${amt(r.intPrev)}</td></tr>`).join('');
@@ -150,8 +159,11 @@
     if (M.balAge != null && M.balAge > 35) notes.push(`<span class="amber">These balances are ${M.balAge} days old. Import a newer proof of balance.</span>`);
     notes.push(M.intAsAt ? `Interest charged from the Macquarie Financial Year Interest Report to ${fdate(M.intAsAt)}${M.intRecon === false ? ' (did not reconcile)' : ''}; FY${esc(M.fy)} is part-year.` : `Interest is blank until the Macquarie Financial Year Interest Report is imported (Statements \u203a Macquarie reports).`);
     notes.push('Rate and repayment are the ones in force today from the lender\u2019s rate-change letters, otherwise as saved on the loan.');
-    M.rows.filter(r => !r.linked).forEach(r => { const eqp = (P || []).find(p => p.role === 'investment-equity-split'); notes.push(`<span class="amber">${esc(r.l.name || 'Loan')} is not linked to a Macquarie account, so its balance and interest are not from Macquarie${eqp && /equity/i.test(r.l.name || '') ? `. Re-import the Macquarie proof of balance and interest report and make sure the \u2022\u2022\u2022\u2022${esc(eqp.last4)} row is set to this loan` : ''}.</span>`); });
-    M.rows.filter(r => r.linked && !r.mac && (r.bal || 0) > 0 && r.intCur == null).forEach(r => notes.push(`${esc(r.l.name || 'Loan')} is not a Macquarie loan, so its interest is not in the Macquarie report. Use the lender\u2019s statement or annual summary (Tax \u203a Loans).`));
+    const noSnap = M.rows.filter(r => r.balCheck === 'none'), diff = M.rows.filter(r => r.balCheck === 'differs');
+    if (noSnap.length) notes.push(`<span class="amber">${noSnap.map(r => esc(r.disp)).join(', ')}: balance is as saved, not yet confirmed from a Macquarie proof of balance. Open Statements \u203a Macquarie reports and use Re-import on the proof of balance (and the interest report); check each account says the right loan in "Treat as".</span>`);
+    if (diff.length) notes.push(`<span class="amber">${diff.map(r => esc(r.disp)).join(', ')}: the saved balance differs from the last Macquarie proof of balance. Re-import the newest report, or check the loan under Edit.</span>`);
+    M.rows.filter(r => !r.linked).forEach(r => { const eqp = (P || []).find(p => p.role === 'investment-equity-split'); notes.push(`<span class="amber">${esc(r.disp)} is not linked to a Macquarie account, so its balance and interest are not from Macquarie${eqp && /equity/i.test(r.l.name || '') ? `. Re-import the Macquarie proof of balance and interest report and make sure the \u2022\u2022\u2022\u2022${esc(eqp.last4)} row is set to this loan` : ''}.</span>`); });
+    M.rows.filter(r => r.linked && !r.mac && (r.bal || 0) > 0 && r.intCur == null).forEach(r => notes.push(`${esc(r.disp)} is not a Macquarie loan, so its interest is not in the Macquarie report. Use the lender\u2019s statement or annual summary (Tax \u203a Loans).`));
     const uns = active().filter(p => p.unsettled).map(p => `${esc(p.name)} (${m0(stats(p).owing)} still to fund at settlement)`);
     if (uns.length) notes.push(`Not yet settled, so not in the loans above: ${uns.join(', ')}.`);
     notes.push('The portal has no live bank feed. Figures are as of the last import.');
@@ -165,8 +177,9 @@
     const k = document.getElementById('kpis'); if (!k || typeof S === 'undefined' || !S) return;
     const old = document.getElementById('dlCard'); if (old) old.remove();
     const P = (window.CJPAccountPreset && window.CJPAccountPreset.presets) || [];
-    k.insertAdjacentHTML('afterend', html(model(S, iso(today()), fyOf, P), P));
+    const LN = (window.CJPAccountPreset && window.CJPAccountPreset.lenders) || [];
+    k.insertAdjacentHTML('afterend', html(model(S, iso(today()), fyOf, P, LN), P));
   }
   try { const o = renderDashboard; renderDashboard = function () { o.apply(this, arguments); try { paint(); } catch (e) { warn('card', e); } }; } catch (e) { warn('renderDashboard', e); }
-  (typeof window !== 'undefined' ? window : globalThis).PortalDashLoans = { version: '1.2', model, plan, applyPlan, inForce, KNOWN, balFor };
+  (typeof window !== 'undefined' ? window : globalThis).PortalDashLoans = { version: '1.3', model, plan, applyPlan, inForce, KNOWN, balFor };
 })();
