@@ -1,5 +1,5 @@
 /* =====================================================================
-   CJP Portal add-on v5.8.0 – Bank statement import (+ PDF, + SharePoint folder pick-up)
+   CJP Portal add-on v5.8.1 – Bank statement import (+ PDF, + SharePoint folder pick-up)
    Loaded after app.js. Adds a "Bank statements" card to Statements.
    Formats: CSV (any bank – columns auto-detected, with or without header),
             XLSX, OFX/QFX, QIF.
@@ -149,7 +149,21 @@
   /* ---------------- Account picker ---------------- */
   function accOptions(sel) { return cfg().bankAccounts.map(a => `<option value="${a.id}" ${a.id === sel ? 'selected' : ''}>${esc(a.name)} – ${ACC_TYPES[a.type]}${a.propertyId ? ' · ' + esc(pname(a.propertyId)) : ''}</option>`).join('') + '<option value="__new">+ New account…</option>' }
   function loanOpts(pid, sel) { const p = prop(pid); return '<option value="">— none —</option>' + (p?.loans || []).map(l => `<option value="${l.id}" ${l.id === sel ? 'selected' : ''}>${esc(l.name)}</option>`).join('') }
-  function guessAccount(name, hint) { const s = (name + ' ' + (hint || '')).toLowerCase(); return cfg().bankAccounts.find(a => (a.match || []).some(m => m && s.includes(m.toLowerCase())) || s.includes(a.name.toLowerCase()))?.id || cfg().bankAccounts[0]?.id || '__new' }
+  function guessAccount(name, hint) {
+    const accounts = cfg().bankAccounts, digits = String(hint || '').replace(/\D/g, '');
+    // The account number printed inside the statement is authoritative. Match it
+    // before filename/saved aliases so 018938993 can never be routed to 9132.
+    if (digits) {
+      const exact = accounts.find(a => {
+        const candidates = [a.accountNumber, a.identifiers?.accountNumber, ...(a.match || [])]
+          .map(v => String(v || '').replace(/\D/g, '')).filter(Boolean);
+        return candidates.some(v => v === digits || (v.length >= 4 && digits.endsWith(v)) || (digits.length >= 4 && v.endsWith(digits)));
+      });
+      if (exact) return exact.id;
+    }
+    const text = String(name || '').toLowerCase();
+    return accounts.find(a => (a.match || []).some(m => m && text.includes(String(m).toLowerCase())) || text.includes(String(a.name || '').toLowerCase()))?.id || accounts[0]?.id || '__new';
+  }
   function newAccountForm() {
     return `<div class="card" id="baNew" style="margin-top:10px"><b>New bank account</b><div class="form2"><div><label>Name</label><input id="baName" placeholder="e.g. Macquarie Offset – Neale St"></div><div><label>Type</label><select id="baType">${Object.entries(ACC_TYPES).map(([k, v]) => `<option value="${k}">${v}</option>`).join('')}</select></div><div><label>Property</label><select id="baProp" onchange="$('baLoan').innerHTML=BI.loanOpts(this.value)">${propOpts('')}</select></div><div><label>Loan (offset / loan accounts)</label><select id="baLoan"><option value="">— none —</option></select></div><div><label>Recognise by (account no. or file name text)</label><input id="baMatch" placeholder="e.g. 1234 or Offset"></div></div></div>`;
   }
