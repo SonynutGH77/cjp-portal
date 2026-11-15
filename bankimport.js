@@ -1,5 +1,5 @@
 /* =====================================================================
-   CJP Portal add-on v5.4.2 – Bank statement import (+ PDF, + SharePoint folder pick-up)
+   CJP Portal add-on v5.4.3 – Bank statement import (+ PDF, + SharePoint folder pick-up)
    Loaded after app.js. Adds a "Bank statements" card to Statements.
    Formats: CSV (any bank – columns auto-detected, with or without header),
             XLSX, OFX/QFX, QIF.
@@ -125,12 +125,18 @@
     const d = t.desc || '', m = merchant(d);
     for (const r of cfg().bankRules) { try { if (new RegExp(r.pattern, 'i').test(d)) return { category: r.category, propertyId: r.propertyId ?? defProp(acc), rule: true, merchant: m } } catch (e) { } }
     let category = 'Other';
-    if (/\binterest\b/i.test(d)) category = t.amount > 0 ? 'Interest income' : 'Mortgage & Loans';
-    else if (/transfer|\btfr\b|to acc|from acc|internal|osko.*(self|own)|payid.*own|^(from|to)\s/i.test(d)) category = 'Transfers';
+    const salary = t.amount > 0 && /salary\s+from\s+brennan\s*it|brennan\s*it.*salary|\bsalary\b|\bpayroll\b|\bwages\b/i.test(d);
+    const reimbursement = t.amount > 0 && /brennan\s*it.*expense|expense\s+claim|reimbursement/i.test(d);
+    const cryptoProceeds = t.amount > 0 && /coinspot|coinstash/i.test(d);
+    const transfer = /transfer|\btfr\b|to acc|from acc|internal|sweep|rapid repay|linked account|osko.*(self|own)|payid.*own|^(from|to)\s/i.test(d);
+    if (reimbursement) category = 'Reimbursement';
+    else if (salary) category = 'Income';
+    else if (cryptoProceeds) category = 'Crypto proceeds';
+    else if (/\binterest\b/i.test(d)) category = t.amount > 0 ? 'Interest income' : 'Mortgage & Loans';
+    else if (transfer) category = 'Transfers';
     else if (t.amount > 0 && /\brent\b|\barg\b|property management/i.test(d)) category = 'Rent';
-    else if (t.amount > 0 && /salary|payroll|wages|pay\s/i.test(d)) category = 'Income';
     else { const b = BUILTIN.find(x => x[0].test(d)); if (b) category = b[1]; else if (t.bankCat && S.categories.includes(t.bankCat)) category = t.bankCat }
-    const pid = ['Transfers', 'Interest income', 'Income'].includes(category) ? '' : defProp(acc) || (PROP_CATS.includes(category) && acc.propertyId ? acc.propertyId : '');
+    const pid = ['Transfers', 'Interest income', 'Income', 'Reimbursement', 'Crypto proceeds'].includes(category) ? '' : defProp(acc) || (PROP_CATS.includes(category) && acc.propertyId ? acc.propertyId : '');
     return { category, propertyId: pid, merchant: m };
   }
   function dupInfo(t, acc) {
@@ -210,7 +216,7 @@
     const isLoan = acc.type === 'loan';
     rows = parsed.map(t => { const c = categorise(t, acc), d = dupInfo(t, acc); return { ...t, ...c, key: d.key, dup: d.dup || '', on: !d.dup && !isLoan && c.category !== 'Transfers' } });
     const sm = summary(), facts = parsed.statementFacts || null;
-    ['Transfers', 'Interest income', 'Income'].forEach(c => { if (!S.categories.includes(c)) S.categories.splice(S.categories.length - 1, 0, c) });
+    ['Transfers', 'Interest income', 'Income', 'Reimbursement', 'Crypto proceeds'].forEach(c => { if (!S.categories.includes(c)) S.categories.splice(S.categories.length - 1, 0, c) });
     modal(`<h2>🏦 ${esc(acc.name)}</h2><div class="muted sm">${esc(file.name)} · ${ACC_TYPES[acc.type]}${acc.propertyId ? ' · ' + esc(pname(acc.propertyId)) : ''}</div>
       ${facts ? reconciliationHtml(facts) : ''}
       ${isLoan ? `<div class="note info">Loan account: repayments and interest aren't added to Spending by default (they'd double-count). Its month-end balances and interest are used for Mortgage analytics and Tax instead. Tick rows below only if you want them as transactions.</div>` : ''}
