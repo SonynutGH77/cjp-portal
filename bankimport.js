@@ -1,5 +1,5 @@
 /* =====================================================================
-   CJP Portal add-on v5.4.1 – Bank statement import (+ PDF, + SharePoint folder pick-up)
+   CJP Portal add-on v5.4.2 – Bank statement import (+ PDF, + SharePoint folder pick-up)
    Loaded after app.js. Adds a "Bank statements" card to Statements.
    Formats: CSV (any bank – columns auto-detected, with or without header),
             XLSX, OFX/QFX, QIF.
@@ -35,20 +35,19 @@
   const merchant = d => String(d || '').toLowerCase().replace(/\d{4,}|card\s*\w*|value date.*|\b(visa|eftpos|pos|purchase|debit|credit|aud|au|ns?w|vic|sa|qld|wa|tas|act|nt)\b|[^a-z ]/g, ' ').replace(/\s+/g, ' ').trim().split(' ').slice(0, 3).join(' ');
   const cfg = () => { S.settings.bankAccounts ||= []; S.settings.bankRules ||= []; return S.settings };
 
-  /* ---------------- Macquarie statement reconciliation v5.4.1 ---------------- */
+  /* ---------------- Macquarie statement reconciliation v5.4.2 ---------------- */
   function statementFacts(text) {
     const T=String(text||'').replace(/\s+/g,' '), num=x=>x==null?null:Math.abs(n0(x));
     const range=T.match(/From\s+(\d{1,2}\s+[A-Za-z]+\s+\d{4})\s+to\s+(\d{1,2}\s+[A-Za-z]+\s+\d{4})/i);
     const acct=T.match(/Account\s+(?:No\.?|Number)\s*([\d ]{6,20})/i)||T.match(/Account\s+(?:No\.?|Number).{0,60}?\b(\d{8,12})\b/i);
-    let opening=null,debits=null,credits=null,closing=null,side='';
-    const block=T.match(/Opening balance\s*\+\s*Total debits\s*-\s*Total credits\s*=\s*Closing balance\s*\$?([\d,]+\.\d{2})\s*(CR|DR)?\s*\$?([\d,]+\.\d{2})\s*\$?([\d,]+\.\d{2})\s*\$?([\d,]+\.\d{2})\s*(CR|DR)?/i);
-    if(block){opening=num(block[1]);side=block[2]||block[6]||'';debits=num(block[3]);credits=num(block[4]);closing=num(block[5])}
-    const f={accountNumber:acct?String(acct[1]).replace(/\D/g,''):'',from:range?toISO(range[1]):null,to:range?toISO(range[2]):null,opening,debits,credits,closing,openingSide:side,calculatedClosing:null,difference:null,reconciled:null};
-    if([opening,debits,credits,closing].every(v=>v!=null)){f.calculatedClosing=/DR/i.test(side)?r2(opening+debits-credits):r2(opening-debits+credits);f.difference=r2(f.calculatedClosing-closing);f.reconciled=Math.abs(f.difference)<0.01} return f;
+    let opening=null,debits=null,credits=null,closing=null,side='',formula='';
+    let b=T.match(/Opening balance\s*\+\s*Total debits\s*-\s*Total credits\s*=\s*Closing balance\s*\$?([\d,]+\.\d{2})\s*(CR|DR)?\s*\$?([\d,]+\.\d{2})\s*\$?([\d,]+\.\d{2})\s*\$?([\d,]+\.\d{2})\s*(CR|DR)?/i);
+    if(b){opening=num(b[1]);side=b[2]||b[6]||'DR';debits=num(b[3]);credits=num(b[4]);closing=num(b[5]);formula='loan'}
+    if(!b){b=T.match(/Opening balance\s*-\s*Total debits\s*\+\s*Total credits\s*=\s*Closing balance\s*\$?([\d,]+\.\d{2})\s*(CR|DR)?\s*\$?([\d,]+\.\d{2})\s*\$?([\d,]+\.\d{2})\s*\$?([\d,]+\.\d{2})\s*(CR|DR)?/i);if(b){opening=num(b[1]);side=b[2]||b[6]||'CR';debits=num(b[3]);credits=num(b[4]);closing=num(b[5]);formula='deposit'}}
+    const f={accountNumber:acct?String(acct[1]).replace(/\D/g,''):'',from:range?toISO(range[1]):null,to:range?toISO(range[2]):null,opening,debits,credits,closing,openingSide:side,formula,calculatedClosing:null,difference:null,reconciled:null};
+    if([opening,debits,credits,closing].every(v=>v!=null)){f.calculatedClosing=formula==='loan'?r2(opening+debits-credits):r2(opening-debits+credits);f.difference=r2(f.calculatedClosing-closing);f.reconciled=Math.abs(f.difference)<0.01}return f;
   }
-  function reconciliationHtml(f){if(!f||f.reconciled==null)return `<div class="note warn">⚠ The report summary could not be fully read. Review the transactions before importing.</div>`;const eq=/DR/i.test(f.openingSide)?`${money(f.opening)} + ${money(f.debits)} − ${money(f.credits)}`:`${money(f.opening)} − ${money(f.debits)} + ${money(f.credits)}`;return f.reconciled?`<div class="note info"><b>✓ Statement reconciles</b><br>${eq} = <b>${money(f.closing)}</b></div>`:`<div class="note warn"><b>⚠ Statement does not reconcile</b><br>${eq} = ${money(f.calculatedClosing)}, report says <b>${money(f.closing)}</b>. Import blocked.</div>`}
-  const statementKey=(f,name)=>[f?.accountNumber||'',f?.from||'',f?.to||'',f?.opening??'',f?.closing??'',name||''].join('|');
-
+  function reconciliationHtml(f){if(!f||f.reconciled==null)return `<div class="note warn">⚠ The report summary could not be fully read. Review the transactions before importing.</div>`;const eq=f.formula==='loan'?`${money(f.opening)} + ${money(f.debits)} − ${money(f.credits)}`:`${money(f.opening)} − ${money(f.debits)} + ${money(f.credits)}`;return f.reconciled?`<div class="note info"><b>✓ Statement reconciles</b><br>${eq} = <b>${money(f.closing)}</b></div>`:`<div class="note warn"><b>⚠ Statement does not reconcile</b><br>${eq} = ${money(f.calculatedClosing)}, report says <b>${money(f.closing)}</b>. Import blocked.</div>`}
   /* ---------------- Parsers ---------------- */
   function parseCsv(t) { const out = []; let row = [], cur = '', q = false; t = t.replace(/^\uFEFF/, ''); for (let i = 0; i < t.length; i++) { const c = t[i]; if (q) { if (c === '"') { if (t[i + 1] === '"') { cur += '"'; i++ } else q = false } else cur += c } else if (c === '"') q = true; else if (c === ',') { row.push(cur); cur = '' } else if (c === '\n' || c === '\r') { if (c === '\r' && t[i + 1] === '\n') i++; row.push(cur); out.push(row); row = []; cur = '' } else cur += c } if (cur || row.length) { row.push(cur); out.push(row) } return out.filter(r => r.some(c => String(c).trim() !== '')) }
   function fromTable(rows) {
@@ -172,6 +171,12 @@
   function summary() {
     const isLoan = acc.type === 'loan', isOff = acc.type === 'offset';
     const bal = balancesByMonth(parsed); if (parsed.ledger) bal[parsed.ledger.date.slice(0, 7)] ??= parsed.ledger.balance;
+    const facts = parsed.statementFacts || null;
+    if ((isLoan || isOff) && facts?.closing != null && facts?.to) {
+      const d = new Date(facts.to + 'T00:00:00'); d.setDate(d.getDate() - 1);
+      const m = `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}`;
+      bal[m] = facts.closing;
+    }
     const months = Object.keys(bal).sort(), first = parsed.map(t => t.date).sort()[0], last = parsed.map(t => t.date).sort().at(-1);
     const intByFY = {}; if (isLoan) parsed.filter(t => /\binterest\b/i.test(t.desc) && t.amount < 0).forEach(t => { const f = fyOf(t.date); intByFY[f] = r2((intByFY[f] || 0) - t.amount) });
     const fullFY = f => { const [a, b] = fyRange(f); return first <= addDays(a, 31) && last >= addDays(b, -10) };
