@@ -1,5 +1,5 @@
 /* =====================================================================
-   CJP Portal add-on v5.6.2 – Bank statement import (+ PDF, + SharePoint folder pick-up)
+   CJP Portal add-on v5.7.0 – Bank statement import (+ PDF, + SharePoint folder pick-up)
    Loaded after app.js. Adds a "Bank statements" card to Statements.
    Formats: CSV (any bank – columns auto-detected, with or without header),
             XLSX, OFX/QFX, QIF.
@@ -177,6 +177,7 @@
   function summary() {
     const isLoan = acc.type === 'loan', isOff = acc.type === 'offset';
     const bal = balancesByMonth(parsed); if (parsed.ledger) bal[parsed.ledger.date.slice(0, 7)] ??= parsed.ledger.balance;
+    const actualMonths = new Set(Object.keys(bal));
     const facts = parsed.statementFacts || null;
     if ((isLoan || isOff) && facts?.closing != null && facts?.to) {
       const d = new Date(facts.to + 'T00:00:00'); d.setDate(d.getDate() - 1);
@@ -216,7 +217,10 @@
     const months = Object.keys(bal).sort(), first = parsed.map(t => t.date).sort()[0], last = parsed.map(t => t.date).sort().at(-1);
     const intByFY = {}; if (isLoan) parsed.filter(t => /\binterest\b/i.test(t.desc) && t.amount < 0).forEach(t => { const f = fyOf(t.date); intByFY[f] = r2((intByFY[f] || 0) - t.amount) });
     const fullFY = f => { const [a, b] = fyRange(f); return first <= addDays(a, 31) && last >= addDays(b, -10) };
-    return { bal, months, first, last, isLoan, isOff, intByFY, fullFY };
+    const spanMonths = months.length;
+    const closingMonth = facts?.to ? (() => { const d = new Date(facts.to + 'T00:00:00'); d.setDate(d.getDate() - 1); return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}` })() : months.at(-1);
+    const quality = Object.fromEntries(months.map(m => [m, m === closingMonth && facts?.closing != null ? 3 : actualMonths.has(m) ? 2 : 1]));
+    return { bal, months, first, last, isLoan, isOff, intByFY, fullFY, spanMonths, quality };
   }
   const addDays = (s, n) => { const d = pd(s); d.setDate(d.getDate() + n); return iso(d) };
   async function start(f) {
@@ -275,9 +279,17 @@
         } else {
           const existing = (S.mortgage || []).find(x => x.propertyId === acc.propertyId && x.month === m) || {};
           const offsetAccounts = { ...(existing.offsetAccounts || {}) };
-          offsetAccounts[acc.id] = Math.max(0, +v || 0);
+          const offsetMeta = { ...(existing.offsetMeta || {}) };
+          const candidate = { quality: sm.quality?.[m] || 1, span: sm.spanMonths || 999, file: file.name, importedAt: new Date().toISOString() };
+          const prior = offsetMeta[acc.id] || { quality: 0, span: 9999 };
+          // Prefer verified closing balances, then actual transaction month-ends,
+          // then carried balances. For equal quality, prefer the shorter report.
+          if (candidate.quality > prior.quality || (candidate.quality === prior.quality && candidate.span <= prior.span)) {
+            offsetAccounts[acc.id] = Math.max(0, +v || 0);
+            offsetMeta[acc.id] = candidate;
+          }
           const combinedOffset = r2(Object.values(offsetAccounts).reduce((n, x) => n + (+x || 0), 0));
-          upsertMonth({ propertyId: acc.propertyId, month: m, offset: combinedOffset, offsetAccounts, source: 'Bank · combined offsets' });
+          upsertMonth({ propertyId: acc.propertyId, month: m, offset: combinedOffset, offsetAccounts, offsetMeta, source: 'Bank · combined offsets' });
         }
         nb++;
       });
