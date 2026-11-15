@@ -2,7 +2,7 @@
    OAuth 2.0 Authorization Code + PKCE. No client secret or private key.
    Access/refresh tokens are session-only. Private storage is resolved after authentication. */
 'use strict';
-const APP_VER = '6.5.4';
+const APP_VER = '6.5.5';
 const C = Object.freeze({
   clientId: 'f0aadf0f-e8d9-4698-ae0b-c9cb3ba23bfb',
   tenant: 'fca9cce9-dd25-4940-bcde-820d1ec34cfe',
@@ -257,7 +257,7 @@ function renderNav() {
   const ib = Inbox.items.length + (window._tbPending || []).length, nd = window._scan?.pending.length || 0, over = S.bills.filter(b => ['over', 'soon'].includes(billState(b).k)).length, err = agentHealth().problems;
   const cur = view === 'prop' ? 'prop:' + curProp : view;
   const btn = (v, label, badge, cls = '') => `<button data-view="${v}" class="${cur === v ? 'active' : ''} ${cls}" onclick="go('${v}')">${label}${badge ? `<span class="badge ${badge[1] || ''}">${badge[0]}</span>` : ''}</button>`;
-  $('navList').innerHTML = btn('dashboard', '📊 Dashboard') + btn('portfolio', '🏘️ Portfolio') + btn('mortgage', '📈 Mortgage analytics') + btn('bills', '🧾 Bills', over ? [over] : null) + btn('spending', '💳 Spending &amp; budget') +
+  $('navList').innerHTML = btn('dashboard', '📊 Dashboard') + btn('portfolio', '🏘️ Portfolio') + btn('mortgage', '📈 Mortgage analytics') + btn('bills', '🧾 Bills', over ? [over] : null) + btn('spending', '💳 Spending &amp; budget') + btn('accounts', '🏦 Accounts') +
     '<div class="navsec">Properties</div>' + active().map(p => btn('prop:' + p.id, `${p.type === 'PPOR' ? '🏡' : '🏢'} ${esc(p.name)}`, null, 'sub')).join('') + (S.properties.length ? '' : btn('props', '➕ Add a property', null, 'sub')) +
     (soldList().length ? '<div class="navsec">Sold</div>' + soldList().map(p => btn('prop:' + p.id, `🏷️ ${esc(p.name)}`, null, 'sub dim')).join('') : '') +
     '<div class="navsec">Data &amp; agents</div>' + btn('tax', '🧮 Tax &amp; accountant') + btn('inbox', '📬 Agent inbox', ib ? [ib, 'amb'] : null) + btn('activity', '🧭 Activity log', err ? ['!', ''] : null) + btn('import', '📥 Statements', nd ? [nd, 'amb'] : null);
@@ -343,9 +343,9 @@ function renderMortgage() {
   const l12 = loanPts.filter(r => monthsBetween(r.month, ll.month) <= 12); const red12 = l12.length > 1 ? l12[0].loan - ll.loan : null;
   const gaps = []; for (let i = 1; i < h.length; i++) { const g = monthsBetween(h[i - 1].month, h[i].month); if (g > 1) { const a = pd(h[i - 1].month); a.setMonth(a.getMonth() + 1); const b = pd(h[i].month); b.setMonth(b.getMonth() - 1); gaps.push(`${fmonth(iso(a))}${g > 2 ? ' – ' + fmonth(iso(b)) : ''}`) } }
   $('mgBody').innerHTML = `<div class="grid k5">${[['Current net debt', m0(nl.net), `${fmonth(nl.month)} · loan ${m0(nl.loan ?? ll.loan)}`, ''], ['Total reduction', m0(nf.net - nl.net), `Since ${fmonth(nf.month)}`, 'green'], ['Avg net reduction', m0(netRed) + '/mth', `Loan principal ${m0(loanRed)}/mth`, 'green'], ['Loan paid down (12m)', red12 != null ? m0(red12) : '—', l12[0] ? `Since ${fmonth(l12[0].month)}` : '', 'green'], ['Debt-free at this pace', payoff, payoffM ? `${Math.floor(payoffM / 12)}y ${payoffM % 12}m` : 'Needs 3+ months', '']].map(k => `<div class="card kpi"><div class="lbl">${k[0]}</div><div class="val ${k[3]}" style="font-size:22px">${k[1]}</div><div class="hint">${k[2]}</div></div>`).join('')}</div>
-  <div class="card" style="margin-top:16px"><h2>Loan, offset &amp; net debt</h2>${lineChart([{ name: 'Loan balance', color: '#5b9dff', pts: loanPts.map(r => ({ x: r.month, y: r.loan })) }, { name: 'Net debt (loan − offset)', color: '#2ecc8f', area: true, pts: netPts.map(r => ({ x: r.month, y: r.net })) }])}</div>
-  <div class="grid c2" style="margin-top:16px"><div class="card"><h2>Offset balance</h2>${offPts.length ? lineChart([{ name: 'Offset', color: '#a78bfa', area: true, pts: offPts.map(r => ({ x: r.month, y: r.offset })) }], { min: 0, h: 200, w: 560 }) : '<div class="empty">No offset data</div>'}</div>
-   <div class="card"><h2>Coverage</h2><div>${h.length} month(s) from ${fmonth(h[0].month)} to ${fmonth(h.at(-1).month)}</div>${gaps.length ? `<div class="note warn"><b>Missing months:</b> ${gaps.join(', ')}</div>` : '<div class="note info">No gaps.</div>'}</div></div>
+  <div class="grid c2" style="margin-top:16px"><div class="card"><h2>Loan, offset &amp; net debt</h2>${lineChart([{ name: 'Loan balance', color: '#5b9dff', pts: loanPts.map(r => ({ x: r.month, y: r.loan })) }, { name: 'Net debt (loan − offset)', color: '#2ecc8f', area: true, pts: netPts.map(r => ({ x: r.month, y: r.net })) }], { h: 220, w: 620 })}</div>
+   <div class="card"><h2>Offset balance</h2>${offPts.length ? lineChart([{ name: 'Offset', color: '#a78bfa', area: true, pts: offPts.map(r => ({ x: r.month, y: r.offset })) }], { min: 0, h: 220, w: 620 }) : '<div class="empty">No offset data</div>'}</div></div>
+  <div class="card" style="margin-top:16px"><h2>Coverage</h2><div>${h.length} month(s) from ${fmonth(h[0].month)} to ${fmonth(h.at(-1).month)}</div>${gaps.length ? `<div class="note warn"><b>Missing months:</b> ${gaps.join(', ')}</div>` : '<div class="note info">No gaps.</div>'}</div>
   <div class="card" style="margin-top:16px"><h2>Monthly history</h2><table class="stack"><thead><tr><th>Month</th><th class="num">Loan</th><th class="num">Offset</th><th class="num">Net debt</th><th class="num">Change</th><th>Source</th><th></th></tr></thead><tbody>${h.slice().reverse().map((r, i, a) => { const prev = a[i + 1]; const ch = prev && r.net != null && prev.net != null ? r.net - prev.net : null; return `<tr><td>${fmonth(r.month)}</td><td class="num">${m0(r.loan)}</td><td class="num">${m0(r.offset)}</td><td class="num"><b>${m0(r.net)}</b></td><td class="num ${ch < 0 ? 'green' : ch > 0 ? 'red' : ''}">${ch != null ? m0(ch) : ''}</td><td class="muted sm">${r.agent ? '🤖 ' : ''}${esc(r.source || '')}</td><td><button class="btn sm" onclick="openMonth('${r.id}')">Edit</button></td></tr>` }).join('')}</tbody></table></div>`;
 }
 function openMonth(id) {
@@ -912,12 +912,55 @@ function pickTimely() { const i = document.createElement('input'); i.type = 'fil
 async function checkTimelyInbox() { window._tbPending = (await Store.list(P_TB)).filter(i => !i.dir && /\.xlsx$/i.test(i.name)).map(i => i.name); return window._tbPending.length }
 async function importTimelyInbox() { const n = (window._tbPending || [])[0]; if (!n) return toast('No TimelyBills files waiting'); const f = new File([await Store.getBlob(`${P_TB}/${n}`)], n); await importTimelyFile(f, { inboxPath: `${P_TB}/${n}` }).catch(e => toast(e.message)) }
 
+
+/* ---------------- Accounts workspace v5.8 ---------------- */
+let selectedAccountId = null;
+function accountRows() {
+  const cfg = S.settings?.bankAccounts || [];
+  const txs = S.transactions || [];
+  return cfg.map(a => {
+    const p = (S.properties || []).find(x => x.id === a.propertyId);
+    const loan = p?.loans?.find(x => x.id === a.loanId) || null;
+    const at = txs.filter(t => t.bankAcc === a.id).sort((x,y) => (x.date||'').localeCompare(y.date||''));
+    const lastTx = at.at(-1);
+    const hist = (S.mortgage || []).filter(x => x.propertyId === a.propertyId).sort((x,y) => x.month.localeCompare(y.month));
+    const lastHist = hist.at(-1);
+    const isLoan = a.type === 'loan';
+    let balance = null, asAt = '';
+    if (isLoan && loan?.balance != null) { balance = -Math.abs(+loan.balance); asAt = lastHist?.month || '' }
+    else if (a.type === 'offset' && lastHist?.offset != null) { balance = +lastHist.offset; asAt = lastHist.month || '' }
+    else if (lastTx?.balance != null) { balance = +lastTx.balance; asAt = lastTx.date || '' }
+    const number = a.identifiers?.accountNumber || a.accountNumber || a.number || '';
+    return { ...a, p, loan, txs: at, balance, asAt, number, isLoan };
+  });
+}
+function accountMask(n) { const d=String(n||'').replace(/\D/g,''); return d ? '••••'+d.slice(-4) : '—' }
+function acctMoney(v){ if(v==null||Number.isNaN(+v)) return '—'; return new Intl.NumberFormat('en-AU',{style:'currency',currency:'AUD',maximumFractionDigits:2}).format(+v) }
+function accountType(a){ return a.type==='loan'?'Loan':a.type==='offset'?'Offset':a.type==='smsf'?'SMSF account':a.type==='credit'?'Credit card':a.type==='savings'?'Savings':'Transaction account' }
+function renderAccounts(){
+  const root=$('accountsList'); if(!root) return;
+  const all=accountRows(), filter=$('acctFilter')?.value||'all';
+  const rows=all.filter(a=>filter==='all'||(filter==='loan'?a.isLoan:!a.isLoan));
+  const cash=all.filter(a=>!a.isLoan).reduce((n,a)=>n+(a.balance||0),0), debt=all.filter(a=>a.isLoan).reduce((n,a)=>n+Math.abs(a.balance||0),0);
+  const verified=all.filter(a=>a.balance!=null).length;
+  $('accountsSummary').innerHTML=`<div class="card glass kpi"><div class="lbl">Cash & offsets</div><div class="val green">${acctMoney(cash)}</div><div class="hint">Across ${all.filter(a=>!a.isLoan).length} account(s)</div></div><div class="card glass kpi"><div class="lbl">Loans</div><div class="val red">${acctMoney(-debt)}</div><div class="hint">Separated by debt purpose</div></div><div class="card glass kpi"><div class="lbl">Net position</div><div class="val">${acctMoney(cash-debt)}</div><div class="hint">Accounts only</div></div><div class="card glass kpi"><div class="lbl">Verified balances</div><div class="val">${verified}/${all.length}</div><div class="hint">From imported statements</div></div>`;
+  root.innerHTML=rows.length?`<table class="stack"><thead><tr><th>Account</th><th>Type</th><th>Purpose / property</th><th>Linked loan</th><th>Last verified</th><th class="num">Balance</th><th></th></tr></thead><tbody>${rows.map(a=>`<tr><td><b>${esc(a.name||'Unnamed account')}</b><div class="muted sm">Macquarie · ${accountMask(a.number)}</div></td><td>${accountType(a)}</td><td>${a.p?esc(a.p.name):'Household / unassigned'}${a.role?`<div class="muted sm">${esc(a.role)}</div>`:''}</td><td>${a.loan?`${esc(a.loan.name)} ${accountMask(a.loan.accountNumber||'')}`:'—'}</td><td>${a.asAt?esc(a.asAt):'Not verified'}</td><td class="num ${a.balance<0?'red':'green'}"><b>${acctMoney(a.balance)}</b></td><td><button class="btn sm" onclick="openAccount('${a.id}')">View</button></td></tr>`).join('')}</tbody></table>`:'<div class="empty">No accounts match this filter.</div>';
+  if(selectedAccountId) openAccount(selectedAccountId,false);
+}
+function openAccount(id,scroll=true){
+  selectedAccountId=id; const a=accountRows().find(x=>x.id===id), box=$('accountDetail'); if(!a||!box)return;
+  const inflow=a.txs.filter(t=>t.amount>0&&t.category!=='Transfers').reduce((n,t)=>n+t.amount,0), outflow=a.txs.filter(t=>t.amount<0&&t.category!=='Transfers').reduce((n,t)=>n-t.amount,0);
+  const recent=a.txs.slice(-12).reverse();
+  box.style.display='block'; box.innerHTML=`<div class="row sp"><div><h2 style="margin:0">${esc(a.name||'Account')} ${accountMask(a.number)}</h2><div class="muted sm">${accountType(a)} · ${a.p?esc(a.p.name):'Household / unassigned'}</div></div><div class="val ${a.balance<0?'red':'green'}" style="font-size:28px">${acctMoney(a.balance)}</div></div><div class="grid k4" style="margin-top:14px"><div class="note"><b>Statement inflow</b><br>${acctMoney(inflow)}</div><div class="note"><b>Statement outflow</b><br>${acctMoney(outflow)}</div><div class="note"><b>Transactions</b><br>${a.txs.length}</div><div class="note"><b>Last verified</b><br>${a.asAt||'Not available'}</div></div><h3 style="margin-top:18px">Recent transactions</h3>${recent.length?`<table class="stack"><thead><tr><th>Date</th><th>Description</th><th>Category</th><th class="num">Amount</th></tr></thead><tbody>${recent.map(t=>`<tr><td>${esc(t.date||'')}</td><td>${esc(t.desc||'')}</td><td>${esc(t.category||'Other')}</td><td class="num ${t.amount<0?'red':'green'}">${acctMoney(t.amount)}</td></tr>`).join('')}</tbody></table>`:'<div class="empty">No imported transactions for this account yet.</div>'}`;
+  if(scroll) box.scrollIntoView({behavior:'smooth',block:'start'});
+}
+
 /* =====================================================================
    START-UP, SIGN-IN GATE, FIRST-RUN SETUP
    ===================================================================== */
 function renderAll() {
   if (!S) return; renderNav();
-  ({ dashboard: renderDashboard, bills: renderBills, spending: renderSpending, mortgage: renderMortgage, portfolio: renderPortfolio, props: renderProps, prop: renderPropPage, import: renderImport, inbox: renderInbox, activity: renderActivity, tax: renderTax })[view]?.();
+  ({ dashboard: renderDashboard, bills: renderBills, spending: renderSpending, mortgage: renderMortgage, portfolio: renderPortfolio, props: renderProps, prop: renderPropPage, import: renderImport, inbox: renderInbox, activity: renderActivity, tax: renderTax, accounts: renderAccounts })[view]?.();
   if (view !== 'dashboard') renderDashboard();
 }
 const msBtn = (label, fn) => `<button class="btn primary big ms" onclick="${fn}"><i><b style="background:#f25022"></b><b style="background:#7fba00"></b><b style="background:#00a4ef"></b><b style="background:#ffb900"></b></i>${label}</button>`;
