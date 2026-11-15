@@ -26,7 +26,7 @@
       }
       for(const a of accounts){const own=norm(a?.identifiers?.accountNumber)||norm(a?.accountNumber);a.match=(a.match||[]).filter(x=>{const n=norm(x);return !fixed[n]||n===own})}
       for(const acct of Object.keys(fixed)){const hits=accounts.filter(a=>norm(a?.identifiers?.accountNumber)===acct||norm(a?.accountNumber)===acct);if(hits.length>1){const keep=hits[0];for(const d of hits.slice(1)){keep.seen=[...new Set([...(keep.seen||[]),...(d.seen||[])])];const i=accounts.indexOf(d);if(i>=0)accounts.splice(i,1)}}}
-      S.settings.bankBalanceHistory={};
+      
       S.settings[REG]={at:new Date().toISOString(),note:'Rebuilt authoritative Macquarie account registry and cleared derived offset ledger only.'};
       if(typeof log==='function')log('Bank account registry repaired','Restored 8993/9132/9207/9124 identities; cleared derived offset ledger only.',{actor:'system',status:'ok'});
       if(typeof save==='function')save();

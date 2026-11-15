@@ -1,4 +1,4 @@
-/* CJP Portal v5.8 - authoritative account presets (Macquarie + the Arthurmac SMSF loan on The Canopy)
+/* CJP Portal v5.8.1 - authoritative account presets (Macquarie + the Arthurmac SMSF loan on The Canopy)
    Creates/updates account identity mappings only. NO balances or transactions are invented.
    Safe/idempotent: can run before bank statements are imported.
 */
@@ -49,7 +49,7 @@
       Object.assign(a,{name:p.name,type:p.type,propertyId,role:p.role});
       if(p.lender)a.lender=p.lender;
       if(loanId)a.loanId=loanId;
-      a.identifiers={...(a.identifiers||{}),accountNumber:p.accountNumber,last4:p.last4,bank:p.bank||'macquarie'};
+      a.accountNumber=p.accountNumber;a.identifiers={bank:p.bank||'macquarie',accountNumber:p.accountNumber,last4:p.last4};
       a.match=[...new Set([...(a.match||[]),p.accountNumber])];
       if(p.loanLast4&&homeLoan)a.loanId=homeLoan.id;
       // v5.7: tie each Macquarie LOAN account to its loan record (and write the account number on the record) so statements, reports and the Dashboard all agree.
@@ -75,7 +75,7 @@
       onlinePurchases:'019172048',
       updatedAt:new Date().toISOString()
     };
-    S.settings.macquarieAccountPreset='2026-11-15-v4-registry-clean';
+    S.settings.macquarieAccountPreset='2026-11-15-v5-registry-sanitized';
     if(changed&&typeof log==='function')log('Macquarie account mappings updated','Salary & Bills ••••8993; Food/Fun/Fuel ••••9132; Online Purchases ••••2048; Home Loan ••••9207; Collins equity split ••••9124; SMSF ••••3269/3997; Arthurmac SMSF loan ••••6385 (The Canopy).',{actor:'system',status:'ok'});
     if(changed&&typeof save==='function')save();
   }
