@@ -1,5 +1,5 @@
 /* =====================================================================
-   CJP Portal add-on v5.3 – Bank statement import (+ PDF, + SharePoint folder pick-up)
+   CJP Portal add-on v5.4 – Bank statement import (+ PDF, + SharePoint folder pick-up)
    Loaded after app.js. Adds a "Bank statements" card to Statements.
    Formats: CSV (any bank – columns auto-detected, with or without header),
             XLSX, OFX/QFX, QIF.
@@ -34,6 +34,28 @@
   const dt = v => { if (v == null || v === '') return null; if (typeof v === 'number') return v > 20000 && v < 80000 ? tbDate(v) : null; const s = String(v).trim(); return toISO(s) || (/^\d{8}$/.test(s) ? `${s.slice(0, 4)}-${s.slice(4, 6)}-${s.slice(6, 8)}` : null) };
   const merchant = d => String(d || '').toLowerCase().replace(/\d{4,}|card\s*\w*|value date.*|\b(visa|eftpos|pos|purchase|debit|credit|aud|au|ns?w|vic|sa|qld|wa|tas|act|nt)\b|[^a-z ]/g, ' ').replace(/\s+/g, ' ').trim().split(' ').slice(0, 3).join(' ');
   const cfg = () => { S.settings.bankAccounts ||= []; S.settings.bankRules ||= []; return S.settings };
+
+  /* ---------------- Statement identity and reconciliation ---------------- */
+  function statementFacts(text) {
+    const T = String(text || '').replace(/\s+/g, ' ');
+    const openingMatch = T.match(/Opening balance\s+\$?([\d,]+\.\d{2})\s*(CR|DR)?/i);
+    const debitMatch = T.match(/Total debits\s+\$?([\d,]+\.\d{2})/i);
+    const creditMatch = T.match(/Total credits\s+\$?([\d,]+\.\d{2})/i);
+    const closingMatch = T.match(/Closing balance\s+\$?([\d,]+\.\d{2})\s*(CR|DR)?/i);
+    const rangeMatch = T.match(/From\s+(\d{1,2}\s+[A-Za-z]+\s+\d{4})\s+to\s+(\d{1,2}\s+[A-Za-z]+\s+\d{4})/i);
+    const accountMatch = T.match(/Account\s+(?:No\.?|Number)\s*([\d ]{6,20})/i) || T.match(/Account\s+(?:No\.?|Number).{0,60}?\b(\d{8,12})\b/i);
+    const opening = openingMatch ? Math.abs(n0(openingMatch[1])) : null, debits = debitMatch ? Math.abs(n0(debitMatch[1])) : null;
+    const credits = creditMatch ? Math.abs(n0(creditMatch[1])) : null, closing = closingMatch ? Math.abs(n0(closingMatch[1])) : null;
+    const facts = { accountNumber: accountMatch ? String(accountMatch[1]).replace(/\D/g, '') : '', from: rangeMatch ? toISO(rangeMatch[1]) : null, to: rangeMatch ? toISO(rangeMatch[2]) : null, opening, openingSide: openingMatch?.[2] || '', debits, credits, closing, closingSide: closingMatch?.[2] || '', calculatedClosing: null, difference: null, reconciled: null };
+    if ([opening, debits, credits, closing].every(v => v != null)) { facts.calculatedClosing = /DR/i.test(facts.openingSide) ? r2(opening + debits - credits) : r2(opening - debits + credits); facts.difference = r2(facts.calculatedClosing - closing); facts.reconciled = Math.abs(facts.difference) < 0.01 }
+    return facts;
+  }
+  function reconciliationHtml(f) {
+    if (!f || f.reconciled == null) return `<div class="note warn">⚠ The report summary could not be fully read. Review the transactions before importing.</div>`;
+    const eq = /DR/i.test(f.openingSide) ? `${money(f.opening)} + ${money(f.debits)} − ${money(f.credits)}` : `${money(f.opening)} − ${money(f.debits)} + ${money(f.credits)}`;
+    return f.reconciled ? `<div class="note info"><b>✓ Statement reconciles</b><br>${eq} = <b>${money(f.closing)}</b></div>` : `<div class="note warn"><b>⚠ Statement does not reconcile</b><br>${eq} = ${money(f.calculatedClosing)}, but the report says <b>${money(f.closing)}</b>.<br>Difference: <b>${money(f.difference)}</b>. Import is blocked.</div>`;
+  }
+  const statementKey = (f, name) => [f?.accountNumber || '', f?.from || '', f?.to || '', f?.opening ?? '', f?.closing ?? '', name || ''].join('|');
 
   /* ---------------- Parsers ---------------- */
   function parseCsv(t) { const out = []; let row = [], cur = '', q = false; t = t.replace(/^\uFEFF/, ''); for (let i = 0; i < t.length; i++) { const c = t[i]; if (q) { if (c === '"') { if (t[i + 1] === '"') { cur += '"'; i++ } else q = false } else cur += c } else if (c === '"') q = true; else if (c === ',') { row.push(cur); cur = '' } else if (c === '\n' || c === '\r') { if (c === '\r' && t[i + 1] === '\n') i++; row.push(cur); out.push(row); row = []; cur = '' } else cur += c } if (cur || row.length) { row.push(cur); out.push(row) } return out.filter(r => r.some(c => String(c).trim() !== '')) }
@@ -101,24 +123,29 @@
     if (/\.(ofx|qfx)$/i.test(f.name)) return fromOfx(await f.text());
     if (/\.qif$/i.test(f.name)) return fromQif(await f.text());
     if (/\.xlsx$/i.test(f.name)) return fromTable(await readXlsxRows(await f.arrayBuffer()));
-    if (/\.pdf$/i.test(f.name)) return parsePdfText(await pdfText(f));
-    return fromTable(parseCsv(await f.text()));
+    if (/\.pdf$/i.test(f.name)) { const text = await pdfText(f), result = parsePdfText(text); result.statementFacts = statementFacts(text); result.fileType = 'pdf'; if (!result.acct && result.statementFacts.accountNumber) result.acct = result.statementFacts.accountNumber; return result }
+    const result = fromTable(parseCsv(await f.text())); result.fileType = 'table'; return result;
   }
 
   /* ---------------- Categorise & de-duplicate ---------------- */
   function defProp(acc) { const p = prop(acc.propertyId); return p && (['smsf', 'loan'].includes(acc.type) || p.type !== 'PPOR') ? p.id : '' }
   const PROP_CATS = ['Council & Rates', 'Strata', 'Insurance', 'Repairs & Maintenance', 'Property Costs', 'Mortgage & Loans', 'Utilities'];
   function categorise(t, acc) {
-    const d = t.desc || '', m = merchant(d);
-    for (const r of cfg().bankRules) { try { if (new RegExp(r.pattern, 'i').test(d)) return { category: r.category, propertyId: r.propertyId ?? defProp(acc), rule: true, merchant: m } } catch (e) { } }
-    let category = 'Other';
-    if (/\binterest\b/i.test(d)) category = t.amount > 0 ? 'Interest income' : 'Mortgage & Loans';
-    else if (/transfer|\btfr\b|to acc|from acc|internal|osko.*(self|own)|payid.*own|^(from|to)\s/i.test(d)) category = 'Transfers';
+    const d = t.desc || '', m = merchant(d), role = acc.role || '';
+    for (const r of cfg().bankRules) { try { if (new RegExp(r.pattern, 'i').test(d)) return { category: r.category, propertyId: r.propertyId ?? defProp(acc), householdPropertyId: r.householdPropertyId || '', incomeType: r.incomeType || '', rule: true, merchant: m } } catch (e) { console.warn('Invalid bank rule', r, e) } }
+    let category = 'Other', incomeType = '', householdPropertyId = '';
+    const salary = t.amount > 0 && /salary|payroll|wages|brennan\s*it|brennanit/i.test(d), reimbursement = t.amount > 0 && /expense claim|expense reimbursement|reimbursement/i.test(d);
+    const transfer = /transfer|\btfr\b|to acc|from acc|internal|sweep|rapid repay|linked account|osko.*(self|own)|payid.*own|^(from|to)\s/i.test(d);
+    const household = t.amount > 0 && /board|household contribution|mum contribution|rent contribution/i.test(d);
+    if (reimbursement) { category = 'Reimbursement'; incomeType = 'reimbursement' }
+    else if (transfer) category = 'Transfers';
+    else if (salary) { category = 'Income'; incomeType = 'employment'; if ((role === 'salary-bills' || /salary.*bills/i.test(acc.name || '')) && acc.propertyId) householdPropertyId = acc.propertyId }
+    else if (household) { category = 'Household contribution'; incomeType = 'household-contribution'; if (acc.propertyId) householdPropertyId = acc.propertyId }
+    else if (/\binterest\b/i.test(d)) category = t.amount > 0 ? 'Interest income' : 'Mortgage & Loans';
     else if (t.amount > 0 && /\brent\b|\barg\b|property management/i.test(d)) category = 'Rent';
-    else if (t.amount > 0 && /salary|payroll|wages|pay\s/i.test(d)) category = 'Income';
-    else { const b = BUILTIN.find(x => x[0].test(d)); if (b) category = b[1]; else if (t.bankCat && S.categories.includes(t.bankCat)) category = t.bankCat }
-    const pid = ['Transfers', 'Interest income', 'Income'].includes(category) ? '' : defProp(acc) || (PROP_CATS.includes(category) && acc.propertyId ? acc.propertyId : '');
-    return { category, propertyId: pid, merchant: m };
+    else { const hit = BUILTIN.find(x => x[0].test(d)); if (hit) category = hit[1]; else if (t.bankCat && S.categories.includes(t.bankCat)) category = t.bankCat }
+    const propertyId = ['Transfers', 'Interest income', 'Income', 'Reimbursement', 'Household contribution'].includes(category) ? '' : defProp(acc) || (PROP_CATS.includes(category) && acc.propertyId ? acc.propertyId : '');
+    return { category, propertyId, householdPropertyId, incomeType, merchant: m };
   }
   function dupInfo(t, acc) {
     const key = `bank|${acc.id}|${t.fitid || ''}|${t.date}|${t.amount.toFixed(2)}|${(t.desc || '').toLowerCase().replace(/\s+/g, ' ').slice(0, 60)}`;
@@ -190,9 +217,10 @@
     acc = cfg().bankAccounts.find(a => a.id === id);
     const isLoan = acc.type === 'loan';
     rows = parsed.map(t => { const c = categorise(t, acc), d = dupInfo(t, acc); return { ...t, ...c, key: d.key, dup: d.dup || '', on: !d.dup && !isLoan && c.category !== 'Transfers' } });
-    const sm = summary();
-    ['Transfers', 'Interest income', 'Income'].forEach(c => { if (!S.categories.includes(c)) S.categories.splice(S.categories.length - 1, 0, c) });
+    const sm = summary(), facts = parsed.statementFacts || null;
+    ['Transfers', 'Interest income', 'Income', 'Reimbursement', 'Household contribution'].forEach(c => { if (!S.categories.includes(c)) S.categories.splice(S.categories.length - 1, 0, c) });
     modal(`<h2>🏦 ${esc(acc.name)}</h2><div class="muted sm">${esc(file.name)} · ${ACC_TYPES[acc.type]}${acc.propertyId ? ' · ' + esc(pname(acc.propertyId)) : ''}</div>
+      ${facts ? reconciliationHtml(facts) : ''}
       ${isLoan ? `<div class="note info">Loan account: repayments and interest aren't added to Spending by default (they'd double-count). Its month-end balances and interest are used for Mortgage analytics and Tax instead. Tick rows below only if you want them as transactions.</div>` : ''}
       <div class="row" style="margin:10px 0;gap:10px"><select id="biFilter" style="width:auto" onchange="BI.draw()"><option value="new">New only</option><option value="sel">Selected</option><option value="dup">Possible duplicates</option><option value="all">All</option></select><button class="btn sm" onclick="BI.all(true)">Select all new</button><button class="btn sm" onclick="BI.all(false)">Select none</button><label class="chk" style="margin:0"><input type="checkbox" id="biLearn" checked> Remember categories I change</label><span class="muted sm" id="biCount"></span></div>
       <div style="max-height:46vh;overflow:auto"><table class="stack"><thead><tr><th></th><th>Date</th><th>Description</th><th class="num">Amount</th><th>Category</th><th>Property</th></tr></thead><tbody id="biRows"></tbody></table></div>
@@ -203,8 +231,10 @@
     window._biSum = sm; draw();
   }
   async function commit() {
+    const facts = parsed?.statementFacts || null;
+    if (facts && facts.reconciled === false) return toast('Import blocked: this statement does not reconcile to its printed totals.');
     const sel = rows.filter(r => r.on), sm = window._biSum;
-    sel.forEach(r => S.transactions.push({ id: uid(), date: r.date, desc: r.desc, amount: r.amount, category: r.category, propertyId: r.propertyId || '', source: `Bank · ${acc.name}`, bankKey: r.key, bankAcc: acc.id }));
+    sel.forEach(r => { const tx = { id: uid(), date: r.date, desc: r.desc, amount: r.amount, category: r.category, propertyId: r.propertyId || '', source: `Bank · ${acc.name}`, bankKey: r.key, bankAcc: acc.id, bankAccountNumber: parsed.acct || facts?.accountNumber || acc.identifiers?.accountNumber || '', statementFrom: facts?.from || '', statementTo: facts?.to || '' }; if (r.householdPropertyId) tx.householdPropertyId = r.householdPropertyId; if (r.incomeType) tx.incomeType = r.incomeType; S.transactions.push(tx) });
     acc.seen = [...new Set([...(acc.seen || []), ...rows.filter(r => !r.dup).map(r => r.key)])].slice(-20000);
     // learn rules
     const learned = new Map(); rows.filter(r => r._learn && r.merchant).forEach(r => learned.set(r.merchant, r));
@@ -214,7 +244,7 @@
       if (l && !mortgageSeries(acc.propertyId).some(h => h.month > lastM)) { if (sm.isLoan) l.balance = Math.abs(sm.bal[lastM]); else l.offset = sm.bal[lastM] } }
     let ni = 0; document.querySelectorAll('.biInt').forEach(cb => { if (!cb.checked) return; const f = cb.dataset.fy; S.taxYears[f] ||= { props: {}, loans: {} }; (S.taxYears[f].loans[acc.loanId] ||= {}).interest = sm.intByFY[f]; ni++ });
     let savedNote = '', dk = file.__path || `Portal/Bank Statements/${acc.name.replace(/[\\/:*?"<>|]/g, '-')}/${file.name}`;
-    if (file.__path || $('biSave')?.checked) S.documents[dk] = { status: 'imported', kind: 'bank', summary: `${acc.name}: ${sel.length} transaction(s)`, at: iso(today()), by: 'you' };
+    if (file.__path || $('biSave')?.checked) S.documents[dk] = { status: 'imported', kind: 'bank', summary: `${acc.name}: ${sel.length} transaction(s)`, at: iso(today()), by: 'you', accountNumber: facts?.accountNumber || parsed.acct || acc.identifiers?.accountNumber || '', statementFrom: facts?.from || '', statementTo: facts?.to || '', openingBalance: facts?.opening ?? null, totalDebits: facts?.debits ?? null, totalCredits: facts?.credits ?? null, closingBalance: facts?.closing ?? null, reconciled: facts?.reconciled ?? null, reconciliationDifference: facts?.difference ?? null, statementKey: statementKey(facts, file.name) };
     if (!file.__path && $('biSave')?.checked) { try { await Store.writeBlob(dk, file); savedNote = ' · file saved' } catch (e) { if (e.auth) return needSignIn(e.message); savedNote = ' · file not saved (' + e.message + ')' } }
     acc.lastImport = new Date().toISOString(); acc.lastTxDate = sm.last;
     log('Bank statement imported', `${acc.name}: ${sel.length} transaction(s)${nb ? `, ${nb} month-end balance(s)` : ''}${ni ? `, interest for ${ni} FY` : ''}${learned.size ? `, ${learned.size} rule(s) learned` : ''} · ${rows.filter(r => r.dup).length} duplicate(s) skipped${savedNote}`, { ref: acc.propertyId || '' });
@@ -273,7 +303,7 @@
   /* ---------------- UI ---------------- */
   function inject() {
     const host = $('scanOut')?.closest('.card');
-    if (host && !$('biCard')) host.insertAdjacentHTML('beforebegin', `<div class="card" id="biCard" style="margin-bottom:16px"><div class="row sp"><h2 style="margin:0">🏦 Bank statements</h2><div class="row"><label class="btn primary" style="margin:0;text-transform:none;letter-spacing:0;font-size:14px;color:#fff">Import statement<input type="file" id="biFile" accept=".csv,.xlsx,.ofx,.qfx,.qif,text/csv" multiple hidden onchange="BI.files(this.files);this.value=''"></label><button class="btn" onclick="BI.manage()">Accounts &amp; rules</button></div></div><div class="muted sm" style="margin-top:8px">Choose a statement (Macquarie <b>PDF</b> transaction listing, or CSV / OFX / QIF from any bank), or save it in <code>Portal/Bank Statements</code> and import it from the list below. You review every transaction before import, duplicates and bills already imported from TimelyBills are flagged, and nothing is imported twice. Offset and loan accounts also update Mortgage analytics; loan interest can be totalled into Tax › Loans.</div><div id="biAccList" style="margin-top:8px"></div><div id="wfList"></div></div>`);
+    if (host && !$('biCard')) host.insertAdjacentHTML('beforebegin', `<div class="card" id="biCard" style="margin-bottom:16px"><div class="row sp"><h2 style="margin:0">🏦 Bank statements</h2><div class="row"><label class="btn primary" style="margin:0;text-transform:none;letter-spacing:0;font-size:14px;color:#fff">Import statement<input type="file" id="biFile" accept=".pdf,.csv,.xlsx,.ofx,.qfx,.qif,application/pdf,text/csv" multiple hidden onchange="BI.files(this.files);this.value=''"></label><button class="btn" onclick="BI.manage()">Accounts &amp; rules</button></div></div><div class="muted sm" style="margin-top:8px">Choose a statement (Macquarie <b>PDF</b> transaction listing, or CSV / OFX / QIF from any bank), or save it in <code>Portal/Bank Statements</code> and import it from the list below. You review every transaction before import, duplicates and bills already imported from TimelyBills are flagged, and nothing is imported twice. Offset and loan accounts also update Mortgage analytics; loan interest can be totalled into Tax › Loans.</div><div id="biAccList" style="margin-top:8px"></div><div id="wfList"></div></div>`);
     renderCard();
   }
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', inject); else inject();
