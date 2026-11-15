@@ -1,5 +1,5 @@
 /* =====================================================================
-   CJP Portal add-on v5.4.4 – Bank statement import (+ PDF, + SharePoint folder pick-up)
+   CJP Portal add-on v5.5.0 – Bank statement import (+ PDF, + SharePoint folder pick-up)
    Loaded after app.js. Adds a "Bank statements" card to Statements.
    Formats: CSV (any bank – columns auto-detected, with or without header),
             XLSX, OFX/QFX, QIF.
@@ -183,22 +183,6 @@
       const m = `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}`;
       bal[m] = facts.closing;
     }
-    // For sparse offset reports, a month with no transactions retains the last
-    // known balance. Fill only months inside the verified statement period.
-    if (isOff && facts?.from && facts?.to) {
-      const start = new Date(facts.from + 'T00:00:00');
-      const end = new Date(facts.to + 'T00:00:00'); end.setDate(end.getDate() - 1);
-      let y = start.getFullYear(), m = start.getMonth() + 1, carry = facts.opening;
-      const endKey = `${end.getFullYear()}-${String(end.getMonth()+1).padStart(2,'0')}`;
-      for (;;) {
-        const key = `${y}-${String(m).padStart(2,'0')}`;
-        if (bal[key] != null) carry = bal[key];
-        else if (carry != null) bal[key] = carry;
-        if (key === endKey) break;
-        m++; if (m === 13) { m = 1; y++ }
-      }
-      bal[endKey] = facts.closing;
-    }
     const months = Object.keys(bal).sort(), first = parsed.map(t => t.date).sort()[0], last = parsed.map(t => t.date).sort().at(-1);
     const intByFY = {}; if (isLoan) parsed.filter(t => /\binterest\b/i.test(t.desc) && t.amount < 0).forEach(t => { const f = fyOf(t.date); intByFY[f] = r2((intByFY[f] || 0) - t.amount) });
     const fullFY = f => { const [a, b] = fyRange(f); return first <= addDays(a, 31) && last >= addDays(b, -10) };
@@ -252,9 +236,27 @@
     // learn rules
     const learned = new Map(); rows.filter(r => r._learn && r.merchant).forEach(r => learned.set(r.merchant, r));
     learned.forEach((r, m) => { const pattern = m.split(' ').map(w => w.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('.{0,6}'); cfg().bankRules = cfg().bankRules.filter(x => x.pattern !== pattern); cfg().bankRules.unshift({ pattern, category: r.category, propertyId: r.propertyId || null }) });
-    let nb = 0; if ($('biBal')?.checked) { sm.months.forEach(m => { let v = sm.bal[m]; if (sm.isLoan) v = Math.abs(v); upsertMonth({ propertyId: acc.propertyId, month: m, ...(sm.isLoan ? { loan: v } : { offset: v }), source: `Bank · ${acc.name}` }); nb++ });
+    let nb = 0; if ($('biBal')?.checked) {
+      sm.months.forEach(m => {
+        let v = sm.bal[m];
+        if (sm.isLoan) {
+          v = Math.abs(v);
+          upsertMonth({ propertyId: acc.propertyId, month: m, loan: v, source: `Bank · ${acc.name}` });
+        } else {
+          const existing = (S.mortgage || []).find(x => x.propertyId === acc.propertyId && x.month === m) || {};
+          const offsetAccounts = { ...(existing.offsetAccounts || {}) };
+          offsetAccounts[acc.id] = Math.max(0, +v || 0);
+          const combinedOffset = r2(Object.values(offsetAccounts).reduce((n, x) => n + (+x || 0), 0));
+          upsertMonth({ propertyId: acc.propertyId, month: m, offset: combinedOffset, offsetAccounts, source: 'Bank · combined offsets' });
+        }
+        nb++;
+      });
       const p = prop(acc.propertyId), l = p?.loans.find(x => x.id === acc.loanId) || p?.loans[0], lastM = sm.months.at(-1);
-      if (l && !mortgageSeries(acc.propertyId).some(h => h.month > lastM)) { if (sm.isLoan) l.balance = Math.abs(sm.bal[lastM]); else l.offset = sm.bal[lastM] } }
+      if (l && !mortgageSeries(acc.propertyId).some(h => h.month > lastM)) {
+        if (sm.isLoan) l.balance = Math.abs(sm.bal[lastM]);
+        else { const latest = (S.mortgage || []).find(x => x.propertyId === acc.propertyId && x.month === lastM); l.offset = latest?.offset ?? sm.bal[lastM] }
+      }
+    }
     let ni = 0; document.querySelectorAll('.biInt').forEach(cb => { if (!cb.checked) return; const f = cb.dataset.fy; S.taxYears[f] ||= { props: {}, loans: {} }; (S.taxYears[f].loans[acc.loanId] ||= {}).interest = sm.intByFY[f]; ni++ });
     let savedNote = '', dk = file.__path || `Portal/Bank Statements/${acc.name.replace(/[\\/:*?"<>|]/g, '-')}/${file.name}`;
     if (file.__path || $('biSave')?.checked) S.documents[dk] = { status: 'imported', kind: 'bank', summary: `${acc.name}: ${sel.length} transaction(s)`, at: iso(today()), by: 'you' };
