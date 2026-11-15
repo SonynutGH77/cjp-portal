@@ -2,7 +2,7 @@
    OAuth 2.0 Authorization Code + PKCE. No client secret or private key.
    Access/refresh tokens are session-only. Private storage is resolved after authentication. */
 'use strict';
-const APP_VER = '6.7.0';
+const APP_VER = '6.7.1';
 const C = Object.freeze({
   clientId: 'f0aadf0f-e8d9-4698-ae0b-c9cb3ba23bfb',
   tenant: 'fca9cce9-dd25-4940-bcde-820d1ec34cfe',
@@ -362,6 +362,28 @@ function rebuildOffsetHistory(pid, quiet = false) {
   if (!quiet) { log('Offset history rebuilt', `${rebuilt} account-ledger month(s) recalculated`, { actor: 'portal', ref: pid || '' }); save(); toast(`Offset history rebuilt: ${rebuilt} month(s)`); }
   return rebuilt;
 }
+function offsetAccountLabel(id) {
+  const a = (S.settings?.bankAccounts || []).find(x => x.id === id);
+  const n = String(a?.identifiers?.accountNumber || a?.accountNumber || '').replace(/\D/g, '');
+  return `${a?.name || id}${n ? ' ••••' + n.slice(-4) : ''}`;
+}
+function offsetBreakdownHtml(row) {
+  const entries = Object.entries(row?.offsetAccounts || {});
+  if (!entries.length) return '<span class="muted sm">No account breakdown</span>';
+  return entries.map(([id,v]) => `<div class="muted sm">${esc(offsetAccountLabel(id))}: <b>${money(+v || 0)}</b></div>`).join('');
+}
+function auditOffsetMonth(pid, month) {
+  const row = (S.mortgage || []).find(r => r.propertyId === pid && r.month === month) || {};
+  const accounts = (S.settings?.bankAccounts || []).filter(a => a.type === 'offset' && a.propertyId === pid);
+  const ledger = S.settings?.bankBalanceHistory || {};
+  const lines = accounts.map(a => {
+    const rec = ledger[a.id]?.[month];
+    const value = rec && typeof rec === 'object' ? rec.balance : rec;
+    const meta = rec && typeof rec === 'object' ? rec : {};
+    return `<tr><td>${esc(offsetAccountLabel(a.id))}</td><td class="num"><b>${value == null ? '—' : money(+value)}</b></td><td>${esc(meta.file || '')}</td><td>${meta.quality ?? '—'}</td><td>${meta.span ?? '—'}</td></tr>`;
+  }).join('');
+  modal(`<h2>Offset ledger audit — ${esc(fmonth(month))}</h2><div class="note info">Derived mortgage offset: <b>${money(row.offset)}</b> · loan: <b>${money(row.loan)}</b> · net debt: <b>${money(row.net)}</b></div><table class="stack"><thead><tr><th>Account</th><th class="num">Ledger balance</th><th>Source file</th><th>Quality</th><th>Span</th></tr></thead><tbody>${lines || '<tr><td colspan="5" class="empty">No account-ledger records</td></tr>'}</tbody></table><div class="muted sm" style="margin-top:10px">Quality 3 = verified statement closing balance; 2 = actual transaction month-end; 1 = carried balance.</div><div class="row end" style="margin-top:14px"><button class="btn primary" onclick="closeModal()">Close</button></div>`);
+}
 function mortgageSeries(pid) { return S.mortgage.filter(r => r.propertyId === pid).sort((a, b) => a.month.localeCompare(b.month)) }
 function monthsBetween(a, b) { const A = pd(a), B = pd(b); return (B.getFullYear() - A.getFullYear()) * 12 + B.getMonth() - A.getMonth() }
 function renderMortgage() {
@@ -377,8 +399,8 @@ function renderMortgage() {
   $('mgBody').innerHTML = `<div class="grid k5">${[['Current net debt', m0(nl.net), `${fmonth(nl.month)} · loan ${m0(nl.loan ?? ll.loan)}`, ''], ['Total reduction', m0(nf.net - nl.net), `Since ${fmonth(nf.month)}`, 'green'], ['Avg net reduction', m0(netRed) + '/mth', `Loan principal ${m0(loanRed)}/mth`, 'green'], ['Loan paid down (12m)', red12 != null ? m0(red12) : '—', l12[0] ? `Since ${fmonth(l12[0].month)}` : '', 'green'], ['Debt-free at this pace', payoff, payoffM ? `${Math.floor(payoffM / 12)}y ${payoffM % 12}m` : 'Needs 3+ months', '']].map(k => `<div class="card kpi"><div class="lbl">${k[0]}</div><div class="val ${k[3]}" style="font-size:22px">${k[1]}</div><div class="hint">${k[2]}</div></div>`).join('')}</div>
   <div class="grid c2" style="margin-top:16px"><div class="card"><h2>Loan, offset &amp; net debt</h2>${lineChart([{ name: 'Loan balance', color: '#5b9dff', pts: loanPts.map(r => ({ x: r.month, y: r.loan })) }, { name: 'Net debt (loan − offset)', color: '#2ecc8f', area: true, pts: netPts.map(r => ({ x: r.month, y: r.net })) }], { h: 220, w: 620 })}</div>
    <div class="card"><h2>Offset balance</h2>${offPts.length ? lineChart([{ name: 'Offset', color: '#a78bfa', area: true, pts: offPts.map(r => ({ x: r.month, y: r.offset })) }], { min: 0, h: 220, w: 620 }) : '<div class="empty">No offset data</div>'}</div></div>
-  <div class="card" style="margin-top:16px"><div class="row sp"><h2>Coverage</h2><button class="btn sm" onclick="rebuildOffsetHistory('${cur}')">↻ Rebuild offset history</button></div><div>${h.length} verified loan month(s) from ${fmonth(h[0].month)} to ${fmonth(h.at(-1).month)}</div>${gaps.length ? `<div class="note warn"><b>Missing loan months:</b> ${gaps.join(', ')}</div>` : '<div class="note info">No gaps in verified loan history.</div>'}</div>
-  <div class="card" style="margin-top:16px"><h2>Monthly history</h2><table class="stack"><thead><tr><th>Month</th><th class="num">Loan</th><th class="num">Offset</th><th class="num">Net debt</th><th class="num">Change</th><th>Source</th><th></th></tr></thead><tbody>${h.slice().reverse().map((r, i, a) => { const prev = a[i + 1]; const ch = prev && r.net != null && prev.net != null ? r.net - prev.net : null; return `<tr><td>${fmonth(r.month)}</td><td class="num">${m0(r.loan)}</td><td class="num">${m0(r.offset)}</td><td class="num"><b>${m0(r.net)}</b></td><td class="num ${ch < 0 ? 'green' : ch > 0 ? 'red' : ''}">${ch != null ? m0(ch) : ''}</td><td class="muted sm">${r.agent ? '🤖 ' : ''}${esc(r.source || '')}</td><td><button class="btn sm" onclick="openMonth('${r.id}')">Edit</button></td></tr>` }).join('')}</tbody></table></div>`;
+  <div class="card" style="margin-top:16px"><div class="row sp"><h2>Coverage</h2><div class="row"><button class="btn sm" onclick="auditOffsetMonth('${cur}','2026-06')">Audit Jun 2026</button><button class="btn sm" onclick="rebuildOffsetHistory('${cur}')">↻ Rebuild offset history</button></div></div><div>${h.length} verified loan month(s) from ${fmonth(h[0].month)} to ${fmonth(h.at(-1).month)}</div>${gaps.length ? `<div class="note warn"><b>Missing loan months:</b> ${gaps.join(', ')}</div>` : '<div class="note info">No gaps in verified loan history.</div>'}</div>
+  <div class="card" style="margin-top:16px"><h2>Monthly history</h2><table class="stack"><thead><tr><th>Month</th><th class="num">Loan</th><th class="num">Offset</th><th class="num">Net debt</th><th class="num">Change</th><th>Source</th><th></th></tr></thead><tbody>${h.slice().reverse().map((r, i, a) => { const prev = a[i + 1]; const ch = prev && r.net != null && prev.net != null ? r.net - prev.net : null; return `<tr><td>${fmonth(r.month)}</td><td class="num">${m0(r.loan)}</td><td class="num"><b>${m0(r.offset)}</b>${offsetBreakdownHtml(r)}</td><td class="num"><b>${m0(r.net)}</b></td><td class="num ${ch < 0 ? 'green' : ch > 0 ? 'red' : ''}">${ch != null ? m0(ch) : ''}</td><td class="muted sm">${r.agent ? '🤖 ' : ''}${esc(r.source || '')}</td><td><button class="btn sm" onclick="openMonth('${r.id}')">Edit</button></td></tr>` }).join('')}</tbody></table></div>`;
 }
 function openMonth(id) {
   const r = id ? S.mortgage.find(x => x.id === id) : { propertyId: $('mgProp').value || active()[0]?.id, month: curYM(), loan: null, offset: null, source: 'Manual (from statement)' };
