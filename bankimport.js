@@ -1,5 +1,5 @@
 /* =====================================================================
-   CJP Portal add-on v5.5.0 – Bank statement import (+ PDF, + SharePoint folder pick-up)
+   CJP Portal add-on v5.6.0 – Bank statement import (+ PDF, + SharePoint folder pick-up)
    Loaded after app.js. Adds a "Bank statements" card to Statements.
    Formats: CSV (any bank – columns auto-detected, with or without header),
             XLSX, OFX/QFX, QIF.
@@ -213,6 +213,7 @@
       cfg().bankAccounts.push(a); id = a.id; log('Bank account added', `${a.name} (${ACC_TYPES[a.type]})`, { ref: a.propertyId });
     }
     acc = cfg().bankAccounts.find(a => a.id === id);
+    if (parsed.acct && !acc.accountNumber) acc.accountNumber = parsed.acct;
     const isLoan = acc.type === 'loan';
     rows = parsed.map(t => { const c = categorise(t, acc), d = dupInfo(t, acc); return { ...t, ...c, key: d.key, dup: d.dup || '', on: !d.dup && !isLoan && c.category !== 'Transfers' } });
     const sm = summary(), facts = parsed.statementFacts || null;
@@ -243,14 +244,13 @@
           v = Math.abs(v);
           upsertMonth({ propertyId: acc.propertyId, month: m, loan: v, source: `Bank · ${acc.name}` });
         } else {
-          const existing = (S.mortgage || []).find(x => x.propertyId === acc.propertyId && x.month === m) || {};
-          const offsetAccounts = { ...(existing.offsetAccounts || {}) };
-          offsetAccounts[acc.id] = Math.max(0, +v || 0);
-          const combinedOffset = r2(Object.values(offsetAccounts).reduce((n, x) => n + (+x || 0), 0));
-          upsertMonth({ propertyId: acc.propertyId, month: m, offset: combinedOffset, offsetAccounts, source: 'Bank · combined offsets' });
+          S.settings.bankBalanceHistory ||= {};
+          const accountHistory = S.settings.bankBalanceHistory[acc.id] ||= {};
+          accountHistory[m] = Math.max(0, +v || 0);
         }
         nb++;
       });
+      if (sm.isOff) rebuildOffsetHistory(acc.propertyId, true);
       const p = prop(acc.propertyId), l = p?.loans.find(x => x.id === acc.loanId) || p?.loans[0], lastM = sm.months.at(-1);
       if (l && !mortgageSeries(acc.propertyId).some(h => h.month > lastM)) {
         if (sm.isLoan) l.balance = Math.abs(sm.bal[lastM]);

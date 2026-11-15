@@ -2,7 +2,7 @@
    OAuth 2.0 Authorization Code + PKCE. No client secret or private key.
    Access/refresh tokens are session-only. Private storage is resolved after authentication. */
 'use strict';
-const APP_VER = '6.5.5';
+const APP_VER = '6.6.0';
 const C = Object.freeze({
   clientId: 'f0aadf0f-e8d9-4698-ae0b-c9cb3ba23bfb',
   tenant: 'fca9cce9-dd25-4940-bcde-820d1ec34cfe',
@@ -142,6 +142,7 @@ function emptyData() { return { ver: APP_VER, updated: null, settings: { income:
 function migrate() {
   const e = emptyData(); for (const k in e) if (S[k] == null) S[k] = e[k];
   S.settings = { ...e.settings, ...S.settings };
+  S.settings.bankBalanceHistory ||= {};
   DEFAULT_CATS.forEach(c => { if (!S.categories.includes(c)) S.categories.splice(S.categories.length - 1, 0, c) });
   S.properties.forEach(p => { p.loans ||= []; p.loans.forEach(l => { l.id ||= uid() }); p.ownPct ??= 100 });
   if (S.ver !== APP_VER) { log('Portal upgraded', `Data updated from v${S.ver || '?'} to v${APP_VER}`, { actor: 'portal' }); S.ver = APP_VER }
@@ -330,12 +331,40 @@ function openTxn() {
 }
 
 /* ---------------- Mortgage analytics ---------------- */
+function rebuildOffsetHistory(pid, quiet = false) {
+  const accounts = (S.settings?.bankAccounts || []).filter(a => a.type === 'offset' && (!pid || a.propertyId === pid));
+  const history = S.settings?.bankBalanceHistory || {};
+  const properties = [...new Set(accounts.map(a => a.propertyId).filter(Boolean))];
+  let rebuilt = 0;
+  properties.forEach(propertyId => {
+    const ids = accounts.filter(a => a.propertyId === propertyId).map(a => a.id);
+    const months = [...new Set(ids.flatMap(id => Object.keys(history[id] || {})))].sort();
+    months.forEach(month => {
+      const offsetAccounts = {};
+      ids.forEach(id => { const v = history[id]?.[month]; if (v != null && isFinite(+v)) offsetAccounts[id] = Math.max(0, +v) });
+      if (!Object.keys(offsetAccounts).length) return;
+      const offset = Math.round(Object.values(offsetAccounts).reduce((n, v) => n + v, 0) * 100) / 100;
+      const row = upsertMonth({ propertyId, month, offset, offsetAccounts, source: 'Bank · combined offsets' });
+      rebuilt++;
+    });
+    const latestLoanMonth = mortgageSeries(propertyId).filter(r => r.loan != null).at(-1)?.month;
+    if (latestLoanMonth) {
+      const p = prop(propertyId), loan = p?.loans?.[0], row = S.mortgage.find(r => r.propertyId === propertyId && r.month === latestLoanMonth);
+      if (loan && row?.offset != null) loan.offset = row.offset;
+    }
+  });
+  if (!quiet) {
+    log('Offset history rebuilt', `${rebuilt} account-aware month(s) recalculated`, { actor: 'portal', ref: pid || '' });
+    save(); toast(`Offset history rebuilt: ${rebuilt} month(s)`);
+  }
+  return rebuilt;
+}
 function mortgageSeries(pid) { return S.mortgage.filter(r => r.propertyId === pid).sort((a, b) => a.month.localeCompare(b.month)) }
 function monthsBetween(a, b) { const A = pd(a), B = pd(b); return (B.getFullYear() - A.getFullYear()) * 12 + B.getMonth() - A.getMonth() }
 function renderMortgage() {
   const sel = $('mgProp'), withData = [...new Set(S.mortgage.map(r => r.propertyId))], cur = sel.value || withData[0] || active()[0]?.id || '';
   sel.innerHTML = S.properties.map(p => `<option value="${p.id}" ${p.id === cur ? 'selected' : ''}>${esc(p.name)}</option>`).join('');
-  const h = mortgageSeries(cur), loanPts = h.filter(r => r.loan != null), netPts = h.filter(r => r.net != null), offPts = h.filter(r => r.offset != null);
+  const allHistory = mortgageSeries(cur), h = allHistory.filter(r => r.loan != null), loanPts = h, netPts = h.filter(r => r.net != null), offPts = h.filter(r => r.offset != null);
   if (!netPts.length || !loanPts.length) { $('mgBody').innerHTML = `<div class="card empty">No verified loan history for this property.<br><br>Save Rapid Repay or loan statements in its Properties folder and import them from <b>Statements</b>, approve agent items, or add a month from a statement with <b>+ Month</b>.</div>`; return }
   const lf = loanPts[0], ll = loanPts.at(-1), nf = netPts[0], nl = netPts.at(-1);
   const loanRed = (lf.loan - ll.loan) / (monthsBetween(lf.month, ll.month) || 1), netRed = (nf.net - nl.net) / (monthsBetween(nf.month, nl.month) || 1);
@@ -345,7 +374,7 @@ function renderMortgage() {
   $('mgBody').innerHTML = `<div class="grid k5">${[['Current net debt', m0(nl.net), `${fmonth(nl.month)} · loan ${m0(nl.loan ?? ll.loan)}`, ''], ['Total reduction', m0(nf.net - nl.net), `Since ${fmonth(nf.month)}`, 'green'], ['Avg net reduction', m0(netRed) + '/mth', `Loan principal ${m0(loanRed)}/mth`, 'green'], ['Loan paid down (12m)', red12 != null ? m0(red12) : '—', l12[0] ? `Since ${fmonth(l12[0].month)}` : '', 'green'], ['Debt-free at this pace', payoff, payoffM ? `${Math.floor(payoffM / 12)}y ${payoffM % 12}m` : 'Needs 3+ months', '']].map(k => `<div class="card kpi"><div class="lbl">${k[0]}</div><div class="val ${k[3]}" style="font-size:22px">${k[1]}</div><div class="hint">${k[2]}</div></div>`).join('')}</div>
   <div class="grid c2" style="margin-top:16px"><div class="card"><h2>Loan, offset &amp; net debt</h2>${lineChart([{ name: 'Loan balance', color: '#5b9dff', pts: loanPts.map(r => ({ x: r.month, y: r.loan })) }, { name: 'Net debt (loan − offset)', color: '#2ecc8f', area: true, pts: netPts.map(r => ({ x: r.month, y: r.net })) }], { h: 220, w: 620 })}</div>
    <div class="card"><h2>Offset balance</h2>${offPts.length ? lineChart([{ name: 'Offset', color: '#a78bfa', area: true, pts: offPts.map(r => ({ x: r.month, y: r.offset })) }], { min: 0, h: 220, w: 620 }) : '<div class="empty">No offset data</div>'}</div></div>
-  <div class="card" style="margin-top:16px"><h2>Coverage</h2><div>${h.length} month(s) from ${fmonth(h[0].month)} to ${fmonth(h.at(-1).month)}</div>${gaps.length ? `<div class="note warn"><b>Missing months:</b> ${gaps.join(', ')}</div>` : '<div class="note info">No gaps.</div>'}</div>
+  <div class="card" style="margin-top:16px"><div class="row sp"><h2>Coverage</h2><button class="btn sm" onclick="rebuildOffsetHistory('${cur}')">↻ Rebuild offset history</button></div><div>${h.length} verified loan month(s) from ${fmonth(h[0].month)} to ${fmonth(h.at(-1).month)}</div>${gaps.length ? `<div class="note warn"><b>Missing loan months:</b> ${gaps.join(', ')}</div>` : '<div class="note info">No gaps in verified loan history.</div>'}</div>
   <div class="card" style="margin-top:16px"><h2>Monthly history</h2><table class="stack"><thead><tr><th>Month</th><th class="num">Loan</th><th class="num">Offset</th><th class="num">Net debt</th><th class="num">Change</th><th>Source</th><th></th></tr></thead><tbody>${h.slice().reverse().map((r, i, a) => { const prev = a[i + 1]; const ch = prev && r.net != null && prev.net != null ? r.net - prev.net : null; return `<tr><td>${fmonth(r.month)}</td><td class="num">${m0(r.loan)}</td><td class="num">${m0(r.offset)}</td><td class="num"><b>${m0(r.net)}</b></td><td class="num ${ch < 0 ? 'green' : ch > 0 ? 'red' : ''}">${ch != null ? m0(ch) : ''}</td><td class="muted sm">${r.agent ? '🤖 ' : ''}${esc(r.source || '')}</td><td><button class="btn sm" onclick="openMonth('${r.id}')">Edit</button></td></tr>` }).join('')}</tbody></table></div>`;
 }
 function openMonth(id) {
