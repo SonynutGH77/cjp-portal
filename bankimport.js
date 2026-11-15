@@ -1,5 +1,5 @@
 /* =====================================================================
-   CJP Portal add-on v5.7.0 – Bank statement import (+ PDF, + SharePoint folder pick-up)
+   CJP Portal add-on v5.8.0 – Bank statement import (+ PDF, + SharePoint folder pick-up)
    Loaded after app.js. Adds a "Bank statements" card to Statements.
    Formats: CSV (any bank – columns auto-detected, with or without header),
             XLSX, OFX/QFX, QIF.
@@ -277,22 +277,16 @@
           v = Math.abs(v);
           upsertMonth({ propertyId: acc.propertyId, month: m, loan: v, source: `Bank · ${acc.name}` });
         } else {
-          const existing = (S.mortgage || []).find(x => x.propertyId === acc.propertyId && x.month === m) || {};
-          const offsetAccounts = { ...(existing.offsetAccounts || {}) };
-          const offsetMeta = { ...(existing.offsetMeta || {}) };
-          const candidate = { quality: sm.quality?.[m] || 1, span: sm.spanMonths || 999, file: file.name, importedAt: new Date().toISOString() };
-          const prior = offsetMeta[acc.id] || { quality: 0, span: 9999 };
-          // Prefer verified closing balances, then actual transaction month-ends,
-          // then carried balances. For equal quality, prefer the shorter report.
-          if (candidate.quality > prior.quality || (candidate.quality === prior.quality && candidate.span <= prior.span)) {
-            offsetAccounts[acc.id] = Math.max(0, +v || 0);
-            offsetMeta[acc.id] = candidate;
-          }
-          const combinedOffset = r2(Object.values(offsetAccounts).reduce((n, x) => n + (+x || 0), 0));
-          upsertMonth({ propertyId: acc.propertyId, month: m, offset: combinedOffset, offsetAccounts, offsetMeta, source: 'Bank · combined offsets' });
+          S.settings.bankBalanceHistory ||= {};
+          const accountLedger = S.settings.bankBalanceHistory[acc.id] ||= {};
+          const candidate = { balance: Math.max(0, +v || 0), quality: sm.quality?.[m] || 1, span: sm.spanMonths || 999, file: file.name, importedAt: new Date().toISOString() };
+          const priorRaw = accountLedger[m];
+          const prior = priorRaw && typeof priorRaw === 'object' ? priorRaw : { balance: priorRaw, quality: 0, span: 9999 };
+          if (candidate.quality > (prior.quality || 0) || (candidate.quality === (prior.quality || 0) && candidate.span <= (prior.span || 9999))) accountLedger[m] = candidate;
         }
         nb++;
       });
+      if (sm.isOff) rebuildOffsetHistory(acc.propertyId, true);
       const p = prop(acc.propertyId), l = p?.loans.find(x => x.id === acc.loanId) || p?.loans[0], lastM = sm.months.at(-1);
       if (l && !mortgageSeries(acc.propertyId).some(h => h.month > lastM)) {
         if (sm.isLoan) l.balance = Math.abs(sm.bal[lastM]);

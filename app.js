@@ -2,7 +2,7 @@
    OAuth 2.0 Authorization Code + PKCE. No client secret or private key.
    Access/refresh tokens are session-only. Private storage is resolved after authentication. */
 'use strict';
-const APP_VER = '6.6.0';
+const APP_VER = '6.7.0';
 const C = Object.freeze({
   clientId: 'f0aadf0f-e8d9-4698-ae0b-c9cb3ba23bfb',
   tenant: 'fca9cce9-dd25-4940-bcde-820d1ec34cfe',
@@ -333,30 +333,33 @@ function openTxn() {
 /* ---------------- Mortgage analytics ---------------- */
 function rebuildOffsetHistory(pid, quiet = false) {
   const accounts = (S.settings?.bankAccounts || []).filter(a => a.type === 'offset' && (!pid || a.propertyId === pid));
-  const history = S.settings?.bankBalanceHistory || {};
+  const ledger = S.settings?.bankBalanceHistory || {};
   const properties = [...new Set(accounts.map(a => a.propertyId).filter(Boolean))];
   let rebuilt = 0;
   properties.forEach(propertyId => {
     const ids = accounts.filter(a => a.propertyId === propertyId).map(a => a.id);
-    const months = [...new Set(ids.flatMap(id => Object.keys(history[id] || {})))].sort();
+    const months = [...new Set(ids.flatMap(id => Object.keys(ledger[id] || {})))].sort();
     months.forEach(month => {
-      const offsetAccounts = {};
-      ids.forEach(id => { const v = history[id]?.[month]; if (v != null && isFinite(+v)) offsetAccounts[id] = Math.max(0, +v) });
+      const offsetAccounts = {}, offsetMeta = {};
+      ids.forEach(id => {
+        const rec = ledger[id]?.[month];
+        const value = rec && typeof rec === 'object' ? rec.balance : rec;
+        if (value == null || !isFinite(+value)) return;
+        offsetAccounts[id] = Math.max(0, +value);
+        if (rec && typeof rec === 'object') offsetMeta[id] = { quality: rec.quality || 0, span: rec.span || 9999, file: rec.file || '', importedAt: rec.importedAt || '' };
+      });
       if (!Object.keys(offsetAccounts).length) return;
       const offset = Math.round(Object.values(offsetAccounts).reduce((n, v) => n + v, 0) * 100) / 100;
-      const row = upsertMonth({ propertyId, month, offset, offsetAccounts, source: 'Bank · combined offsets' });
+      upsertMonth({ propertyId, month, offset, offsetAccounts, offsetMeta, source: 'Bank account ledger' });
       rebuilt++;
     });
     const latestLoanMonth = mortgageSeries(propertyId).filter(r => r.loan != null).at(-1)?.month;
     if (latestLoanMonth) {
-      const p = prop(propertyId), loan = p?.loans?.[0], row = S.mortgage.find(r => r.propertyId === propertyId && r.month === latestLoanMonth);
+      const property = prop(propertyId), loan = property?.loans?.[0], row = S.mortgage.find(r => r.propertyId === propertyId && r.month === latestLoanMonth);
       if (loan && row?.offset != null) loan.offset = row.offset;
     }
   });
-  if (!quiet) {
-    log('Offset history rebuilt', `${rebuilt} account-aware month(s) recalculated`, { actor: 'portal', ref: pid || '' });
-    save(); toast(`Offset history rebuilt: ${rebuilt} month(s)`);
-  }
+  if (!quiet) { log('Offset history rebuilt', `${rebuilt} account-ledger month(s) recalculated`, { actor: 'portal', ref: pid || '' }); save(); toast(`Offset history rebuilt: ${rebuilt} month(s)`); }
   return rebuilt;
 }
 function mortgageSeries(pid) { return S.mortgage.filter(r => r.propertyId === pid).sort((a, b) => a.month.localeCompare(b.month)) }
