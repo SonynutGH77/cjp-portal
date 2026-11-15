@@ -1,11 +1,11 @@
-/* CJP Portal v5.5 - Money Insights: Salary/Wages + FFF */
+/* CJP Portal v5.6 - Money Insights: Salary/Wages + FFF */
 'use strict';
 (function(){
  const $i=id=>document.getElementById(id), M=n=>typeof m0==='function'?m0(n):'$'+Math.round(n||0).toLocaleString('en-AU');
  const ym=d=>(d||'').slice(0,7), now=()=>new Date(), months=n=>{let a=[];let d=new Date();d.setDate(1);for(let i=0;i<n;i++){a.push(d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0'));d.setMonth(d.getMonth()-1)}return a};
  const accountName=t=>{const a=(S.settings?.bankAccounts||[]).find(a=>a.id===t.bankAcc);return a?.name||''};
  const isFFF=t=>/\bfff\b|food.?fuel.?fun/i.test(accountName(t)+' '+(t.note||'')+' '+(t.desc||'')) && !/salary|wages|payroll/i.test(t.desc||'');
- const isSalary=t=>/salary|wages|payroll|salary and wages/i.test(accountName(t)+' '+(t.desc||''));
+ const isSalary=t=>t.amount>0&&(t.category==='Income'||/salary|wages|payroll|brennan\s*it/i.test(t.desc||''))&&!/expense claim|reimburse|coinspot|coinstash/i.test(t.desc||'');
  const transfer=t=>/transfer|\btfr\b|from account|to account|osko/i.test(t.desc||'')||t.category==='Transfers';
  const fun=t=>/dining|entertainment|shopping|subscription/i.test(t.category||'');
  const food=t=>/grocer|food/i.test(t.category||'');
