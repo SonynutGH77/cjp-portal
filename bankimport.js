@@ -1,5 +1,5 @@
 /* =====================================================================
-   CJP Portal add-on v5.4.3 – Bank statement import (+ PDF, + SharePoint folder pick-up)
+   CJP Portal add-on v5.4.4 – Bank statement import (+ PDF, + SharePoint folder pick-up)
    Loaded after app.js. Adds a "Bank statements" card to Statements.
    Formats: CSV (any bank – columns auto-detected, with or without header),
             XLSX, OFX/QFX, QIF.
@@ -182,6 +182,22 @@
       const d = new Date(facts.to + 'T00:00:00'); d.setDate(d.getDate() - 1);
       const m = `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}`;
       bal[m] = facts.closing;
+    }
+    // For sparse offset reports, a month with no transactions retains the last
+    // known balance. Fill only months inside the verified statement period.
+    if (isOff && facts?.from && facts?.to) {
+      const start = new Date(facts.from + 'T00:00:00');
+      const end = new Date(facts.to + 'T00:00:00'); end.setDate(end.getDate() - 1);
+      let y = start.getFullYear(), m = start.getMonth() + 1, carry = facts.opening;
+      const endKey = `${end.getFullYear()}-${String(end.getMonth()+1).padStart(2,'0')}`;
+      for (;;) {
+        const key = `${y}-${String(m).padStart(2,'0')}`;
+        if (bal[key] != null) carry = bal[key];
+        else if (carry != null) bal[key] = carry;
+        if (key === endKey) break;
+        m++; if (m === 13) { m = 1; y++ }
+      }
+      bal[endKey] = facts.closing;
     }
     const months = Object.keys(bal).sort(), first = parsed.map(t => t.date).sort()[0], last = parsed.map(t => t.date).sort().at(-1);
     const intByFY = {}; if (isLoan) parsed.filter(t => /\binterest\b/i.test(t.desc) && t.amount < 0).forEach(t => { const f = fyOf(t.date); intByFY[f] = r2((intByFY[f] || 0) - t.amount) });
