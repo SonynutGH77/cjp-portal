@@ -1,4 +1,4 @@
-/* CJP Portal v5.4.2 - one-time account mapping/data repair
+/* CJP Portal v5.5.0 - account registry and mapping repair
    Repairs erroneous classification of Macquarie 018939207 as an offset.
    Idempotent: records migration flag and will not run twice.
 */
@@ -6,8 +6,32 @@
 (function(){
   const FLAG='mappingRepair_20261107_9207';
   function run(){
-    if(typeof S==='undefined'||!S?.settings||S.settings[FLAG]) return;
+    if(typeof S==='undefined'||!S?.settings) return;
     const accounts=S.settings.bankAccounts||[];
+    const REG='mappingRepair_20261115_registry_v2';
+    if(!S.settings[REG]){
+      const norm=v=>String(v||'').replace(/\D/g,'');
+      const fixed={
+        '018938993':{name:'Macquarie Salary & Bills ••••8993',last4:'8993',type:'offset',propertyId:'p1',role:'salary-bills'},
+        '018939132':{name:'Macquarie Food/Fun/Fuel ••••9132',last4:'9132',type:'offset',propertyId:'p1',role:'fff'},
+        '018939207':{name:'Macquarie Neale Home Loan ••••9207',last4:'9207',type:'loan',propertyId:'p1',role:'home-loan'},
+        '018939124':{name:'Macquarie Collins Wharf Equity Split ••••9124',last4:'9124',type:'loan',propertyId:'p2',role:'investment-equity-split'}
+      };
+      for(const [acct,f] of Object.entries(fixed)){
+        let a=accounts.find(x=>norm(x?.identifiers?.accountNumber)===acct||norm(x?.accountNumber)===acct);
+        if(!a){a={id:'ba'+Math.random().toString(36).slice(2,10),seen:[],match:[]};accounts.push(a)}
+        Object.assign(a,{name:f.name,type:f.type,propertyId:f.propertyId,role:f.role,accountNumber:acct});
+        a.identifiers={...(a.identifiers||{}),accountNumber:acct,last4:f.last4,bank:'macquarie'};
+        a.match=[acct];
+      }
+      for(const a of accounts){const own=norm(a?.identifiers?.accountNumber)||norm(a?.accountNumber);a.match=(a.match||[]).filter(x=>{const n=norm(x);return !fixed[n]||n===own})}
+      for(const acct of Object.keys(fixed)){const hits=accounts.filter(a=>norm(a?.identifiers?.accountNumber)===acct||norm(a?.accountNumber)===acct);if(hits.length>1){const keep=hits[0];for(const d of hits.slice(1)){keep.seen=[...new Set([...(keep.seen||[]),...(d.seen||[])])];const i=accounts.indexOf(d);if(i>=0)accounts.splice(i,1)}}}
+      S.settings.bankBalanceHistory={};
+      S.settings[REG]={at:new Date().toISOString(),note:'Rebuilt authoritative Macquarie account registry and cleared derived offset ledger only.'};
+      if(typeof log==='function')log('Bank account registry repaired','Restored 8993/9132/9207/9124 identities; cleared derived offset ledger only.',{actor:'system',status:'ok'});
+      if(typeof save==='function')save();
+    }
+    if(S.settings[FLAG]) return;
     const a9207=accounts.find(a=>a?.identifiers?.accountNumber==='018939207'||a?.identifiers?.last4==='9207'||(a.match||[]).includes('018939207'));
     if(!a9207) return;
 

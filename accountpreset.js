@@ -1,4 +1,4 @@
-/* CJP Portal v5.7 - authoritative account presets (Macquarie + the Arthurmac SMSF loan on The Canopy)
+/* CJP Portal v5.8 - authoritative account presets (Macquarie + the Arthurmac SMSF loan on The Canopy)
    Creates/updates account identity mappings only. NO balances or transactions are invented.
    Safe/idempotent: can run before bank statements are imported.
 */
@@ -24,11 +24,16 @@
     S.settings.bankAccounts ||= [];
     const A=S.settings.bankAccounts;
     const loanByAcct=acct=>{for(const pr of (S.properties||[])){const l=(pr.loans||[]).find(x=>norm(x.acct)===acct);if(l)return {pr,l}}return null};
-    const find=p=>A.find(a=>norm(a?.identifiers?.accountNumber)===p.accountNumber || a?.identifiers?.last4===p.last4 || (a.match||[]).some(m=>norm(m)===p.accountNumber||norm(m)===p.last4));
+    const find=p=>A.find(a=>norm(a?.identifiers?.accountNumber)===p.accountNumber) || A.find(a=>norm(a?.accountNumber)===p.accountNumber);
     // establish the home-loan id if known so both operational offsets point to it
     const homeProp=(S.properties||[]).find(p=>p.id==='p1');
     const homeLoan=homeProp?.loans?.find(l=>/home loan/i.test(l.name||'')&&!/equity/i.test(l.name||'')) || homeProp?.loans?.[0];
     let changed=0;
+    // Clean numeric aliases that were learned against the wrong saved account.
+    const auth=[...PRESETS,...LENDERS], authNums=new Set(auth.map(p=>p.accountNumber)), authLast4=new Set(auth.map(p=>p.last4));
+    for(const a of A){ const before=JSON.stringify(a); a.match=(a.match||[]).filter(m=>{const n=norm(m);return !authNums.has(n)&&!authLast4.has(n)}); if(JSON.stringify(a)!==before)changed++ }
+    // Collapse duplicate saved accounts that claim the same full account number.
+    for(const p of auth){ const hits=A.filter(a=>norm(a?.identifiers?.accountNumber)===p.accountNumber||norm(a?.accountNumber)===p.accountNumber); if(hits.length>1){ const keep=hits[0]; for(const d of hits.slice(1)){ keep.seen=[...new Set([...(keep.seen||[]),...(d.seen||[])])]; const i=A.indexOf(d); if(i>=0){A.splice(i,1);changed++} } } }
     for(const p of PRESETS.concat(LENDERS)){
       let a=find(p);
       if(!a){a={id:'ba'+Math.random().toString(36).slice(2,10),seen:[],match:[]};A.push(a);changed++}
@@ -45,7 +50,7 @@
       if(p.lender)a.lender=p.lender;
       if(loanId)a.loanId=loanId;
       a.identifiers={...(a.identifiers||{}),accountNumber:p.accountNumber,last4:p.last4,bank:p.bank||'macquarie'};
-      a.match=[...new Set([...(a.match||[]),p.accountNumber,...(p.fullMatchOnly?[]:[p.last4])])];
+      a.match=[...new Set([...(a.match||[]),p.accountNumber])];
       if(p.loanLast4&&homeLoan)a.loanId=homeLoan.id;
       // v5.7: tie each Macquarie LOAN account to its loan record (and write the account number on the record) so statements, reports and the Dashboard all agree.
       // The equity split's loan record sits on the property that SECURES it (8 Neale Street) even though the money was used for Collins Wharf.
@@ -70,7 +75,7 @@
       onlinePurchases:'019172048',
       updatedAt:new Date().toISOString()
     };
-    S.settings.macquarieAccountPreset='2026-11-09-v3';
+    S.settings.macquarieAccountPreset='2026-11-15-v4-registry-clean';
     if(changed&&typeof log==='function')log('Macquarie account mappings updated','Salary & Bills ••••8993; Food/Fun/Fuel ••••9132; Online Purchases ••••2048; Home Loan ••••9207; Collins equity split ••••9124; SMSF ••••3269/3997; Arthurmac SMSF loan ••••6385 (The Canopy).',{actor:'system',status:'ok'});
     if(changed&&typeof save==='function')save();
   }
