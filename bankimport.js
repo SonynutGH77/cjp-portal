@@ -1,5 +1,5 @@
 /* =====================================================================
-   CJP Portal add-on v5.6.1 – Bank statement import (+ PDF, + SharePoint folder pick-up)
+   CJP Portal add-on v5.6.2 – Bank statement import (+ PDF, + SharePoint folder pick-up)
    Loaded after app.js. Adds a "Bank statements" card to Statements.
    Formats: CSV (any bank – columns auto-detected, with or without header),
             XLSX, OFX/QFX, QIF.
@@ -183,22 +183,35 @@
       const m = `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}`;
       bal[m] = facts.closing;
     }
-    // A sparse offset account can have entire months with no transactions. The
-    // balance therefore remains unchanged until the next transaction. Carry the
-    // last verified month-end balance across every month inside the report range.
-    if (isOff && facts?.from && facts?.to) {
-      const start = new Date(facts.from + 'T00:00:00');
-      const end = new Date(facts.to + 'T00:00:00'); end.setDate(end.getDate() - 1);
-      let y = start.getFullYear(), mo = start.getMonth() + 1, carry = facts.opening;
-      const endKey = `${end.getFullYear()}-${String(end.getMonth()+1).padStart(2,'0')}`;
-      for (;;) {
-        const key = `${y}-${String(mo).padStart(2,'0')}`;
-        if (bal[key] != null) carry = bal[key];
-        else if (carry != null) bal[key] = carry;
-        if (key === endKey) break;
-        mo++; if (mo === 13) { mo = 1; y++ }
+    // Sparse offset reports can omit report From/To metadata and can have whole
+    // months with no transactions. Derive the monthly range from statement metadata
+    // when available; otherwise fall back to earliest/latest parsed transaction dates.
+    if (isOff) {
+      const txDates = parsed.map(t => t.date).filter(Boolean).sort();
+      const startISO = facts?.from || txDates[0] || '';
+      const closingISO = facts?.to || txDates.at(-1) || '';
+      if (startISO && closingISO) {
+        const start = new Date(startISO + 'T00:00:00');
+        let end = new Date(closingISO + 'T00:00:00');
+        // A report To date is normally exclusive (e.g. 1 Jul means Jun month-end).
+        // A transaction fallback is inclusive, so keep its own calendar month.
+        if (facts?.to) end.setDate(end.getDate() - 1);
+        let y = start.getFullYear(), mo = start.getMonth() + 1;
+        const endKey = `${end.getFullYear()}-${String(end.getMonth()+1).padStart(2,'0')}`;
+        // Prefer the first known month-end balance, then the printed opening balance.
+        const knownKeys = Object.keys(bal).sort();
+        let carry = facts?.opening ?? (knownKeys.length ? bal[knownKeys[0]] : null);
+        for (;;) {
+          const key = `${y}-${String(mo).padStart(2,'0')}`;
+          if (bal[key] != null) carry = bal[key];
+          else if (carry != null) bal[key] = carry;
+          if (key === endKey) break;
+          mo++; if (mo === 13) { mo = 1; y++ }
+          // Safety guard against malformed dates.
+          if (y > end.getFullYear() + 1) break;
+        }
+        if (facts?.closing != null) bal[endKey] = facts.closing;
       }
-      if (facts.closing != null) bal[endKey] = facts.closing;
     }
     const months = Object.keys(bal).sort(), first = parsed.map(t => t.date).sort()[0], last = parsed.map(t => t.date).sort().at(-1);
     const intByFY = {}; if (isLoan) parsed.filter(t => /\binterest\b/i.test(t.desc) && t.amount < 0).forEach(t => { const f = fyOf(t.date); intByFY[f] = r2((intByFY[f] || 0) - t.amount) });
